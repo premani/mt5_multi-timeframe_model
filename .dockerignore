@@ -1,0 +1,56 @@
+# Git関連
+.git/
+.gitignore
+.github/
+
+# Python関連
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# 仮想環境
+venv/
+env/
+ENV/
+
+# データ・モデル・ログ（容量大）
+data/
+models/
+logs/
+reports/
+
+# 設定ファイル（機密情報）
+.env
+config/*.yaml
+!config/*.template.yaml
+
+# エディタ・IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS生成ファイル
+.DS_Store
+Thumbs.db
+
+# テストファイル
+_test_*.py
+tests/__pycache__/
+.pytest_cache/
+
+# ドキュメント（不要）
+docs/
+*.md
+!README.md
+
+# その他
+*.log
+*.bak
+*.tmp
