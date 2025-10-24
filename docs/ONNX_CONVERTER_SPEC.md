@@ -53,9 +53,13 @@
   - 同一入力でPyTorch vs ONNX比較
   - RMSE劣化 < 1% 確認
     ↓
-出力: models/*_model.onnx
-  - 最適化済みモデル
-  - メタデータ（精度・速度）
+出力: models/onnx_converter.onnx + 関連ファイル
+  - models/onnx_converter.onnx (FP16最適化済み)
+  - models/onnx_converter_fp32.onnx (FP32版)
+  - models/onnx_converter_metadata.json (メタデータ)
+
+※ 既存ファイルがある場合、JST日時プレフィックス付きでリネーム退避
+  例: models/20251023_143045_onnx_converter.onnx
 ```
 
 ---
@@ -486,7 +490,7 @@ def visualize_warmup_effect(results: Dict[str, Any]):
 if __name__ == '__main__':
     # 固定ウォームアップ
     results_fixed = benchmark_latency_with_warmup(
-        'models/fx_model.onnx',
+        'models/onnx_converter.onnx',
         input_shape=(1, 5, 360, 52),
         warmup_calls=20,
         measurement_calls=1000,
@@ -495,7 +499,7 @@ if __name__ == '__main__':
 
     # 適応的ウォームアップ
     results_adaptive = benchmark_latency_with_warmup(
-        'models/fx_model.onnx',
+        'models/onnx_converter.onnx',
         input_shape=(1, 5, 360, 52),
         warmup_calls=50,  # 最大ウォームアップ
         measurement_calls=1000,
@@ -868,12 +872,190 @@ def test_scaling_verification():
 
 ---
 
+## 💾 出力ファイル
+
+| ファイル名 | 内容 | Git管理 |
+|-----------|------|---------|
+| `models/onnx_converter_fp32.onnx` | ONNX FP32モデル（検証用） | ❌ 除外 |
+| `models/onnx_converter_report.json` | 変換情報・性能メトリクス | ❌ 除外 |
+| `models/onnx_converter_fp16.onnx` | ONNX FP16量子化モデル（実運用） | ❌ 除外 |
+| `models/onnx_converter_report.md` | 人間可読レポート | ❌ 除外 |
+
+**バックアップ**: 既存ファイルは `YYYYMMDD_HHMMSS_onnx_converter_*.<ext>` にリネーム (JST)
+
+例:
+- `20251024_162000_onnx_converter_fp32.onnx`
+- `20251024_162000_onnx_converter_fp16.onnx`
+
+---
+
+## 📄 レポート生成
+
+### JSONレポート (`models/onnx_converter_report.json`)
+
+MQL5実装やデプロイで参照する情報:
+
+```json
+{
+  "timestamp": "2025-10-24T16:20:45+09:00",
+  "process": "onnx_converter",
+  "version": "1.0",
+  "input": {
+    "model_file": "models/trainer.pt",
+    "source_report": "models/trainer_report.json"
+  },
+  "output": {
+    "fp32_file": "models/onnx_converter_fp32.onnx",
+    "fp16_file": "models/onnx_converter_fp16.onnx",
+    "fp32_size_mb": 4.8,
+    "fp16_size_mb": 2.4
+  },
+  "conversion": {
+    "onnx_opset": 17,
+    "dynamic_axes": ["batch_size"],
+    "original_size_mb": 4.8,
+    "quantized_size_mb": 2.4,
+    "compression_ratio": 0.50
+  },
+  "model_info": {
+    "input_shape": [1, 5, 360, 60],
+    "output_shape": [1, 36],
+    "total_parameters": 1250000,
+    "architecture": "Multi-Head LSTM"
+  },
+  "latency": {
+    "samples": 1000,
+    "avg_ms": 6.2,
+    "median_ms": 5.8,
+    "p95_ms": 8.1,
+    "p99_ms": 9.7,
+    "max_ms": 12.3,
+    "target_ms": 10.0,
+    "passed": true
+  },
+  "accuracy": {
+    "test_samples": 5000,
+    "pytorch_rmse": 0.3245,
+    "onnx_rmse": 0.3258,
+    "degradation_percent": 0.4,
+    "max_degradation_percent": 1.0,
+    "passed": true
+  },
+  "verification": {
+    "numerical_check": "passed",
+    "shape_check": "passed",
+    "operator_support": "passed",
+    "onnx_checker": "passed"
+  },
+  "performance": {
+    "conversion_time_sec": 205,
+    "memory_peak_mb": 8000
+  }
+}
+```
+
+### Markdownレポート (`models/onnx_converter_report.md`)
+
+人間による検証用の可読レポート:
+
+```markdown
+# ONNX変換 実行レポート
+
+**実行日時**: 2025-10-24 16:20:45 JST  
+**変換時間**: 3分25秒  
+**バージョン**: 1.0
+
+## 📊 入力
+
+- **モデルファイル**: `models/trainer.pt`
+- **元のパラメータ数**: 1,250,000
+- **アーキテクチャ**: Multi-Head LSTM
+
+## 🎯 処理結果
+
+- **出力ファイル (FP32)**: `models/onnx_converter_fp32.onnx` (4.8 MB)
+- **出力ファイル (FP16)**: `models/onnx_converter_fp16.onnx` (2.4 MB)
+
+### 変換情報
+
+| 項目 | 値 |
+|-----|-----|
+| ONNX Opset | 17 |
+| Dynamic Axes | batch_size |
+| 元のサイズ (FP32) | 4.8 MB |
+| 変換後サイズ (FP16) | 2.4 MB |
+| 圧縮率 | 50% |
+
+### モデル形状
+
+| 項目 | 形状 |
+|-----|------|
+| 入力 | (1, 5, 360, 60) |
+| 出力 | (1, 36) |
+
+## ⚡ レイテンシ検証
+
+**測定サンプル数**: 1,000回
+
+| メトリクス | 時間 (ms) | 判定 |
+|----------|----------|------|
+| 平均 | 6.2 | - |
+| 中央値 (p50) | 5.8 | - |
+| p95 | 8.1 | ✅ <10ms |
+| p99 | 9.7 | ✅ <10ms |
+| 最大 | 12.3 | ⚠️ >10ms (稀) |
+
+**判定**: ✅ 合格（p95が目標10ms以下）
+
+## 📉 精度劣化検証
+
+**テストサンプル数**: 5,000
+
+| モデル | RMSE | 判定 |
+|-------|------|------|
+| PyTorch (FP32) | 0.3245 | - |
+| ONNX (FP16) | 0.3258 | - |
+| **劣化率** | **+0.4%** | **✅ <1.0%** |
+
+**判定**: ✅ 合格（劣化率1%以下）
+
+## ✅ 検証結果
+
+| 項目 | 結果 |
+|-----|------|
+| 数値精度チェック | ✅ 合格 |
+| 形状チェック | ✅ 合格 |
+| オペレータサポート | ✅ 合格 |
+| ONNX Checker | ✅ 合格 |
+
+## ⚙️ パフォーマンス
+
+- **変換時間**: 205秒 (3分25秒)
+- **ピークメモリ**: 8,000 MB
+
+## ⚠️ 警告・注意事項
+
+- p99で9.7ms（目標10ms以下、ギリギリ合格）
+- 最大レイテンシ12.3msが1回発生（稀な異常値）
+- FP16量子化による精度劣化は0.4%（許容範囲内）
+
+## ✅ 最終判定
+
+- ✅ レイテンシ要件クリア
+- ✅ 精度要件クリア
+- ✅ MQL5実装準備完了
+- ✅ 実運用可能
+```
+
+---
+
 ## 📝 ログ出力
 
 ### 時刻表示ルール
 - **全ログ**: 日本時間(JST)で表示
 - **フォーマット**: `YYYY-MM-DD HH:MM:SS JST`
 - **変換開始/終了時刻**: 日本時間で明記
+- **詳細**: [TIMEZONE_UTILS_SPEC.md](./utils/TIMEZONE_UTILS_SPEC.md)
 
 ```
 🔄 第6段階: ONNX変換開始 [2025-10-24 04:15:20 JST]

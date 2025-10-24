@@ -23,16 +23,16 @@
 - 特徴量計算の独立性・再現性を確保
 
 **処理段階の分離**:
-- **第1段階（データ収集）**: `src/data_collector.py` → `models/*_raw_data.h5`
-- **第2段階（特徴量計算）**: `src/feature_calculator.py` → `models/*_features.h5`
-- **第3段階（前処理）**: `src/preprocessor.py` → `models/*_preprocessed.h5`
+- **第1段階（データ収集）**: `src/data_collector.py` → `data/data_collector.h5`
+- **第2段階（特徴量計算）**: `src/feature_calculator.py` → `data/feature_calculator.h5`
+- **第3段階（前処理）**: `src/preprocessor.py` → `data/preprocessor.h5`
 
 ---
 
 ## 🔄 処理フロー
 
 ```
-入力: models/*_raw_data.h5（第1段階で収集）
+入力: data/data_collector.h5（第1段階で収集）
   ├─ M1: (N, 6) [time, open, high, low, close, volume]
   ├─ M5: (N, 6)
   ├─ M15: (N, 6)
@@ -67,11 +67,14 @@
   - カテゴリ追加毎に精度確認
   - 2%以上改善で受入
     ↓
-出力: models/*_features.h5
+出力: data/feature_calculator.h5
   ├─ features: (N, 50-80) float32
   ├─ feature_names: 特徴量名リスト
   ├─ category_info: カテゴリ別統計
   └─ metadata: 計算統計情報
+
+※ 既存ファイルがある場合、JST日時プレフィックス付きでリネーム退避
+  例: data/20251023_143045_feature_calculator.h5
 ```
 
 ---
@@ -310,56 +313,307 @@ class BaseCalculator(ABC):
 
 ---
 
+## 💾 出力ファイル
+
+### カテゴリ別ファイル（キャッシュ・増分更新用）
+
+| ファイル名 | 内容 | Git管理 |
+|-----------|------|---------|
+| `data/feature_calculator/basic_multi_tf.h5` | 基本マルチTF特徴量 (20列) | ❌ 除外 |
+| `data/feature_calculator/microstructure.h5` | マイクロ構造特徴量 (9列) | ❌ 除外 |
+| `data/feature_calculator/volatility_regime.h5` | ボラティリティ特徴量 (9列) | ❌ 除外 |
+| `data/feature_calculator/momentum.h5` | モメンタム特徴量 (7列) | ❌ 除外 |
+| `data/feature_calculator/session_time.h5` | セッション時刻特徴量 (7列) | ❌ 除外 |
+| `data/feature_calculator/pattern.h5` | パターン特徴量 (10列) | ❌ 除外 |
+| `data/feature_calculator/order_flow.h5` | オーダーフロー特徴量 (4列) | ❌ 除外 |
+
+### 統合ファイル（次処理が使用）
+
+| ファイル名 | 内容 | Git管理 |
+|-----------|------|---------|
+| `data/feature_calculator.h5` | 全特徴量統合版 (66列) | ❌ 除外 |
+| `data/feature_calculator_report.json` | カテゴリ別統計・検証結果 | ❌ 除外 |
+| `data/feature_calculator_report.md` | 人間可読レポート | ❌ 除外 |
+
+**バックアップ**: 既存ファイルは `YYYYMMDD_HHMMSS_feature_calculator*.<ext>` にリネーム (JST)
+
+例: 
+- `20251024_143000_feature_calculator.h5`
+- `20251024_143000_feature_calculator/basic_multi_tf.h5`
+
+**キャッシュ機構**: カテゴリ別ファイルが存在する場合は再計算をスキップ（増分更新）
+
+---
+
+## 📄 レポート生成
+
+### JSONレポート (`data/feature_calculator_report.json`)
+
+次処理（前処理）が読み込むパラメータ情報:
+
+```json
+{
+  "timestamp": "2025-10-24T14:30:45+09:00",
+  "process": "feature_calculator",
+  "version": "1.0",
+  "input": {
+    "file": "data/data_collector.h5",
+    "source_report": "data/data_collector_report.json",
+    "samples": 2500000
+  },
+  "output": {
+    "file": "data/feature_calculator.h5",
+    "size_mb": 480,
+    "category_files": {
+      "basic_multi_tf": "data/feature_calculator/basic_multi_tf.h5",
+      "microstructure": "data/feature_calculator/microstructure.h5",
+      "volatility_regime": "data/feature_calculator/volatility_regime.h5",
+      "momentum": "data/feature_calculator/momentum.h5",
+      "session_time": "data/feature_calculator/session_time.h5",
+      "pattern": "data/feature_calculator/pattern.h5",
+      "order_flow": "data/feature_calculator/order_flow.h5"
+    }
+  },
+  "features": {
+    "total": 66,
+    "categories": {
+      "basic_multi_tf": {
+        "count": 20,
+        "enabled": true,
+        "cached": false,
+        "calculation_time_sec": 25.3,
+        "columns": ["M1_price_change_pips", "M5_price_change_pips", ...]
+      },
+      "microstructure": {
+        "count": 9,
+        "enabled": true,
+        "cached": true,
+        "calculation_time_sec": 0.1,
+        "columns": ["spread_pips", "tick_volume", ...]
+      },
+      "volatility_regime": {
+        "count": 9,
+        "enabled": true,
+        "cached": false,
+        "calculation_time_sec": 20.1,
+        "columns": ["M1_atr14", "M5_atr14", ...]
+      },
+      "momentum": {
+        "count": 7,
+        "enabled": true,
+        "cached": false,
+        "calculation_time_sec": 25.0,
+        "columns": ["M5_rsi14", "M15_macd_diff", ...]
+      },
+      "session_time": {
+        "count": 7,
+        "enabled": true,
+        "cached": false,
+        "calculation_time_sec": 15.2,
+        "columns": ["hour_sin", "hour_cos", ...]
+      },
+      "pattern": {
+        "count": 10,
+        "enabled": true,
+        "cached": false,
+        "calculation_time_sec": 35.8,
+        "columns": ["double_top_5m", "channel_breakout", ...]
+      },
+      "order_flow": {
+        "count": 4,
+        "enabled": true,
+        "cached": false,
+        "calculation_time_sec": 30.5,
+        "enabled": true,
+        "columns": ["order_imbalance", "vwap_distance", ...]
+      }
+    }
+  },
+  "quality": {
+    "nan_count": 150,
+    "nan_ratio": 0.00006,
+    "inf_count": 0,
+    "constant_columns": 0,
+    "low_variance_columns": 2,
+    "high_correlation_pairs": 3
+  },
+  "validation": {
+    "incremental_test": {
+      "baseline_accuracy": 0.523,
+      "after_microstructure": 0.541,
+      "after_volatility": 0.556,
+      "after_momentum": 0.568,
+      "after_session": 0.572,
+      "after_pattern": 0.580,
+      "after_orderflow": 0.585
+    }
+  },
+  "performance": {
+    "total_execution_time_sec": 180,
+    "cache_hits": 1,
+    "cache_misses": 6,
+    "merge_time_sec": 1.0,
+    "memory_peak_mb": 12000,
+    "avg_feature_time_ms": 2.7
+  }
+}
+```
+
+### Markdownレポート (`data/feature_calculator_report.md`)
+
+人間による検証用の可読レポート:
+
+```markdown
+# 特徴量計算 実行レポート
+
+**実行日時**: 2025-10-24 14:30:45 JST  
+**処理時間**: 3分00秒  
+**バージョン**: 1.0
+
+## 📊 入力
+
+- **入力ファイル**: `data/data_collector.h5`
+- **サンプル数**: 2,500,000
+
+## 🎯 処理結果
+
+- **出力ファイル**: `data/feature_calculator.h5`
+- **ファイルサイズ**: 480 MB
+- **特徴量数**: 66列
+
+### カテゴリ別特徴量
+
+| カテゴリ | 列数 | 状態 | 計算時間 | 主要特徴量例 |
+|---------|------|------|---------|-------------|
+| basic_multi_tf | 20 | ✅ 計算 | 25.3秒 | M1_price_change_pips, M5_price_change_pips |
+| microstructure | 9 | 💾 キャッシュ | 0.1秒 | spread_pips, tick_volume |
+| volatility_regime | 9 | ✅ 計算 | 20.1秒 | M1_atr14, M5_atr14 |
+| momentum | 7 | ✅ 計算 | 25.0秒 | M5_rsi14, M15_macd_diff |
+| session_time | 7 | ✅ 計算 | 15.2秒 | hour_sin, hour_cos, tokyo_session |
+| pattern | 10 | ✅ 計算 | 35.8秒 | double_top_5m, channel_breakout |
+| order_flow | 4 | ✅ 計算 | 30.5秒 | order_imbalance, vwap_distance |
+
+**合計**: 66列  
+**キャッシュヒット**: 1カテゴリ  
+**統合処理**: 1.0秒
+
+## 📈 品質統計
+
+| 項目 | 値 |
+|-----|-----|
+| NaN数 | 150 (0.006%) |
+| ∞数 | 0 |
+| 定数列 | 0 |
+| 低分散列 | 2 |
+| 高相関ペア | 3 |
+
+## 🧪 段階的検証結果
+
+カテゴリ追加による精度向上の推移:
+
+| ステップ | 特徴量数 | 精度 | 向上幅 |
+|---------|---------|------|--------|
+| Baseline (basic_multi_tf) | 20 | 52.3% | - |
+| + microstructure | 29 | 54.1% | +1.8% |
+| + volatility_regime | 38 | 55.6% | +1.5% |
+| + momentum | 45 | 56.8% | +1.2% |
+| + session_time | 52 | 57.2% | +0.4% |
+| + pattern | 62 | 58.0% | +0.8% |
+| + order_flow | 66 | 58.5% | +0.5% |
+
+**総向上**: 52.3% → 58.5% (+6.2%)
+
+## ⚙️ パフォーマンス
+
+- **実行時間**: 180秒 (3分00秒)
+- **ピークメモリ**: 12,000 MB
+- **平均特徴量計算時間**: 2.7ms/サンプル
+
+## ⚠️ 警告・注意事項
+
+- 低分散列2個を検出（後続の前処理で除外推奨）
+- 高相関ペア3組（相関係数 >0.95）
+- NaN比率は許容範囲内（0.006%）
+
+## ✅ 検証結果
+
+## ✅ 検証結果
+
+- ✅ 全特徴量の計算完了
+- ✅ NaN・∞のチェック完了
+- ✅ 段階的精度検証で全カテゴリが貢献
+- ✅ メモリ使用量は許容範囲内
+- ✅ カテゴリ別ファイル保存（増分更新対応）
+```
+
+---
+
 ## 📝 ログ出力
 
 ### 時刻表示ルール
 - **全ログ**: 日本時間(JST)で表示
 - **フォーマット**: `YYYY-MM-DD HH:MM:SS JST`
 - **データ期間**: 日本時間で明記
+- **詳細**: [TIMEZONE_UTILS_SPEC.md](./utils/TIMEZONE_UTILS_SPEC.md)
 
 ```
 🔄 第2段階: 特徴量計算開始 [2025-10-23 23:45:12 JST]
-📂 入力: models/fx_mtf_20251022_100000_raw_data.h5
+📂 入力: data/data_collector.h5
    期間: 2024-01-01 00:00:00 JST ～ 2024-12-31 23:59:00 JST
-   - M1: 45000行
-   - M5: 45000行
-   - M15: 45000行
-   - H1: 45000行
-   - H4: 45000行
+   サンプル数: 2500000
 
 🧮 basic_multi_tf 計算開始
    - TF内特徴: 15列
    - TF間特徴: 5列
    → 合計: 20列
+   💾 保存: data/feature_calculator/basic_multi_tf.h5
 
-🧮 microstructure 計算開始
+💾 microstructure キャッシュ使用
+   → 合計: 9列 (0.1秒)
    - スプレッド: 4列
    - ティック: 3列
    - 方向転換: 2列
    → 合計: 9列
+   💾 保存: data/feature_calculator/microstructure.h5
 
 🧮 volatility_regime 計算開始
    - ATR: 6列
    - レジーム: 3列
    → 合計: 9列
+   💾 保存: data/feature_calculator/volatility_regime.h5
 
 🧮 momentum 計算開始
    - RSI: 2列
    - MACD: 3列
    - BB: 2列
    → 合計: 7列
+   💾 保存: data/feature_calculator/momentum.h5
 
 🧮 session_time 計算開始
    - 時刻: 4列
    - セッション: 3列
    → 合計: 7列
+   💾 保存: data/feature_calculator/session_time.h5
 
-📊 特徴量統計:
-   - 総特徴量数: 52列
-   - NaN比率: 0.3%
-   - 計算時間: 45.2秒
+🧮 pattern 計算開始
+   → 合計: 10列
+   � 保存: data/feature_calculator/pattern.h5
 
-💾 出力: models/fx_mtf_20251022_120000_features.h5
+🧮 order_flow 計算開始
+   → 合計: 4列
+   💾 保存: data/feature_calculator/order_flow.h5
+
+📦 カテゴリ統合処理
+   - キャッシュヒット: 1カテゴリ
+   - 新規計算: 6カテゴリ
+   - 統合時間: 1.0秒
+
+�📊 特徴量統計:
+   - 総特徴量数: 66列
+   - NaN比率: 0.006%
+   - 計算時間: 152.0秒
+
+💾 出力: data/feature_calculator.h5
 ✅ 第2段階: 特徴量計算完了
 ```
 
@@ -736,8 +990,8 @@ optimizer = CorrelationThresholdOptimizer({
 })
 
 # 特徴量データ読込
-features = pd.read_hdf("models/fx_lstm_model_20251022_features.h5", "features")
-targets = pd.read_hdf("models/fx_lstm_model_20251022_features.h5", "targets")
+features = pd.read_hdf("data/feature_calculator.h5", "features")
+targets = pd.read_hdf("data/feature_calculator.h5", "targets")
 
 # 最適化実行
 results = optimizer.optimize_threshold(features, targets)
