@@ -1,0 +1,83 @@
+# feature_calculator.template.yaml
+# 第2段階: 特徴量計算 設定ファイル
+
+# カテゴリ有効化設定
+enable_categories:
+  basic_multi_tf: true       # 基本マルチTF特徴量（必須）
+  microstructure: true       # マイクロ構造拡張
+  volatility_regime: true    # ボラティリティ・レジーム
+  momentum: true             # 簡潔勢い指標
+  session_time: true         # セッション・時間（必須）
+  pattern: false             # パターン認識（Phase 3実装予定）
+  order_flow: false          # オーダーフロー（Phase 3実装予定）
+
+# 再計算対象カテゴリ（指定がない場合は全て再計算）
+# 例: ['basic_multi_tf', 'session_time'] のように指定すると、これらのみ再計算し他はキャッシュ使用
+recalculate_categories: null  # null=全て再計算, []またはリスト=特定カテゴリのみ再計算
+
+# 段階的検証設定
+incremental_validation:
+  enabled: true              # カテゴリ追加毎の精度検証
+  min_improvement: 0.02      # 最小改善率（2%）
+  baseline_samples: 5000     # 検証サンプル数
+
+# 品質閾値
+quality:
+  max_nan_ratio: 0.05        # NaN比率上限（5%）
+  min_features: 30           # 最小特徴量数
+  max_features: 100          # 最大特徴量数
+  correlation_threshold: 0.95  # 高相関除外閾値
+
+# パフォーマンス設定
+performance:
+  max_calculation_time: 300  # 最大計算時間（秒）
+  batch_size: null           # null=全データ一括処理
+  enable_cache: true         # カテゴリ別キャッシュ
+  memory_limit_mb: 16000     # メモリ上限（MB）
+
+# 入出力設定
+io:
+  input_file: "data/data_collector.h5"
+  output_file: "data/feature_calculator.h5"
+  output_dir: "data/feature_calculator"  # カテゴリ別ファイル
+  backup_existing: true      # 既存ファイルをバックアップ
+  compression: null          # HDF5圧縮（null=圧縮なし、速度優先）
+
+# ログ設定
+logging:
+  level: "INFO"              # DEBUG, INFO, WARNING, ERROR
+  file: "logs/{timestamp}_feature_calculator.log"
+  console: true
+
+# ATR計算設定（全カテゴリ共通）
+atr:
+  periods: [7, 14, 28]       # ATR計算期間
+  method: "wilder"           # 計算方法（wilder, ema）
+
+# RSI設定
+rsi:
+  period: 14
+  method: "wilder"
+
+# MACD設定
+macd:
+  fast_period: 12
+  slow_period: 26
+  signal_period: 9
+
+# ボリンジャーバンド設定
+bollinger:
+  period: 20
+  std_multiplier: 2.0
+
+# セッション時刻設定（UTC）
+sessions:
+  tokyo:
+    start: "00:00"           # UTC 00:00 = JST 09:00
+    end: "06:00"             # UTC 06:00 = JST 15:00
+  london:
+    start: "07:00"           # UTC 07:00 = JST 16:00
+    end: "15:00"             # UTC 15:00 = JST 00:00
+  newyork:
+    start: "12:00"           # UTC 12:00 = JST 21:00
+    end: "20:00"             # UTC 20:00 = JST 05:00
