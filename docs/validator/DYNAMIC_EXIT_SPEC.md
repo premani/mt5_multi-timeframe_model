@@ -663,7 +663,7 @@ def analyze_exit_performance():
 
 ---
 
-## � Entry Gate（エントリー前フィルタ）
+## 🚪 Entry Gate（エントリー前フィルタ）
 
 ### スプレッド/ニュースゲート
 
@@ -1078,7 +1078,7 @@ elif action["type"] == "TRAIL":
 
 ---
 
-## � 将来拡張
+## 🔮 将来拡張
 
 ### 実装フェーズ2: 機械学習ベースの動的調整
 

@@ -621,7 +621,7 @@ def walk_forward_validation(
         results['frontier_models'].append({
             'fold': i,
             'timestamp_range': (timestamps[train_start], timestamps[val_end]),
-            'model_path': f'models/wf_fold{i}.pt',
+            'model_path': f'models/trainer_fold{i}.pt',
             'train_score': train_score,
             'val_score': val_score,
             'thresholds': best_thr
@@ -744,7 +744,7 @@ def generate_threshold_grid(search_space, n_points=10):
 def test_walk_forward():
     """Walk-forward評価の検証"""
     results = walk_forward_validation(
-        'data/preprocessed.h5',
+        'data/preprocessor.h5',
         k_folds=6,
         overlap=0.5
     )
@@ -1405,12 +1405,237 @@ except ValueError as e:
 
 ---
 
+## 💾 出力ファイル
+
+| ファイル名 | 内容 | Git管理 |
+|-----------|------|---------|
+| `models/trainer.pt` | PyTorch学習済みモデル | ❌ 除外 |
+| `models/trainer_report.json` | WFV結果・ハイパーパラメータ | ❌ 除外 |
+| `models/trainer_report.md` | 人間可読レポート | ❌ 除外 |
+
+**バックアップ**: 既存ファイルは `YYYYMMDD_HHMMSS_trainer.<ext>` にリネーム (JST)
+
+例: `20251024_154500_trainer.pt`
+
+---
+
+## 📄 レポート生成
+
+### JSONレポート (`models/trainer_report.json`)
+
+次処理（検証・ONNX変換）が読み込むパラメータ情報:
+
+```json
+{
+  "timestamp": "2025-10-24T15:45:18+09:00",
+  "process": "trainer",
+  "version": "1.0",
+  "input": {
+    "file": "data/preprocessor.h5",
+    "source_report": "data/preprocessor_report.json",
+    "features": 60,
+    "sequences": 2499500
+  },
+  "output": {
+    "file": "models/trainer.pt",
+    "size_mb": 45
+  },
+  "training": {
+    "method": "Walk-Forward Validation",
+    "total_folds": 5,
+    "train_ratio": 0.8,
+    "validation_ratio": 0.2,
+    "best_fold": 3,
+    "best_fold_metrics": {
+      "val_loss": 0.412,
+      "direction_accuracy": 0.72,
+      "magnitude_mae": 8.5,
+      "neutral_ratio": 0.28
+    }
+  },
+  "hyperparameters": {
+    "model_architecture": "Multi-Head LSTM",
+    "lstm_hidden_size": 128,
+    "lstm_num_layers": 2,
+    "dropout": 0.3,
+    "learning_rate": 0.001,
+    "batch_size": 512,
+    "epochs": 100,
+    "early_stopping_patience": 10,
+    "loss_weights": {
+      "direction": 0.52,
+      "magnitude": 0.48
+    }
+  },
+  "wfv_results": {
+    "fold_1": {
+      "train_period": "2018-01-01 ~ 2020-12-31",
+      "val_period": "2021-01-01 ~ 2021-12-31",
+      "val_loss": 0.445,
+      "direction_accuracy": 0.68,
+      "magnitude_mae": 9.2,
+      "epochs": 85
+    },
+    "fold_2": {
+      "train_period": "2018-01-01 ~ 2021-12-31",
+      "val_period": "2022-01-01 ~ 2022-12-31",
+      "val_loss": 0.428,
+      "direction_accuracy": 0.70,
+      "magnitude_mae": 8.8,
+      "epochs": 78
+    },
+    "fold_3": {
+      "train_period": "2018-01-01 ~ 2022-12-31",
+      "val_period": "2023-01-01 ~ 2023-12-31",
+      "val_loss": 0.412,
+      "direction_accuracy": 0.72,
+      "magnitude_mae": 8.5,
+      "epochs": 92
+    },
+    "fold_4": {
+      "train_period": "2018-01-01 ~ 2023-12-31",
+      "val_period": "2024-01-01 ~ 2024-12-31",
+      "val_loss": 0.419,
+      "direction_accuracy": 0.71,
+      "magnitude_mae": 8.7,
+      "epochs": 88
+    },
+    "fold_5": {
+      "train_period": "2018-01-01 ~ 2024-12-31",
+      "val_period": "2025-01-01 ~ 2025-10-23",
+      "val_loss": 0.433,
+      "direction_accuracy": 0.69,
+      "magnitude_mae": 9.1,
+      "epochs": 75
+    }
+  },
+  "model_info": {
+    "total_parameters": 1250000,
+    "trainable_parameters": 1250000,
+    "input_features": 60,
+    "sequence_length": 360,
+    "output_heads": 2
+  },
+  "performance": {
+    "total_training_time_sec": 12588,
+    "avg_epoch_time_sec": 145,
+    "memory_peak_mb": 16000
+  },
+  "reproducibility": {
+    "seed": 42,
+    "git_commit": "a1b2c3d4",
+    "config_hash": "sha256:...",
+    "pytorch_version": "2.8.0",
+    "cuda_version": "12.8"
+  }
+}
+```
+
+### Markdownレポート (`models/trainer_report.md`)
+
+人間による検証用の可読レポート:
+
+```markdown
+# 学習 実行レポート
+
+**実行日時**: 2025-10-24 15:45:18 JST  
+**総学習時間**: 3時間29分48秒  
+**バージョン**: 1.0
+
+## 📊 入力
+
+- **入力ファイル**: `data/preprocessor.h5`
+- **特徴量数**: 60列
+- **シーケンス数**: 2,499,500
+
+## 🎯 処理結果
+
+- **出力ファイル**: `models/trainer.pt`
+- **ファイルサイズ**: 45 MB
+- **ベストフォールド**: Fold 3
+
+## 🔄 Walk-Forward Validation 結果
+
+| Fold | 学習期間 | 検証期間 | Val Loss | 方向精度 | 価格幅MAE | Epochs |
+|------|---------|---------|---------|---------|----------|--------|
+| 1 | 2018-01～2020-12 | 2021-01～2021-12 | 0.445 | 68.0% | 9.2 pips | 85 |
+| 2 | 2018-01～2021-12 | 2022-01～2022-12 | 0.428 | 70.0% | 8.8 pips | 78 |
+| **3** | **2018-01～2022-12** | **2023-01～2023-12** | **0.412** | **72.0%** | **8.5 pips** | **92** |
+| 4 | 2018-01～2023-12 | 2024-01～2024-12 | 0.419 | 71.0% | 8.7 pips | 88 |
+| 5 | 2018-01～2024-12 | 2025-01～2025-10 | 0.433 | 69.0% | 9.1 pips | 75 |
+
+**平均**: Val Loss=0.427, 方向精度=70.0%, 価格幅MAE=8.9 pips
+
+## 🏗️ モデル構成
+
+| 項目 | 値 |
+|-----|-----|
+| アーキテクチャ | Multi-Head LSTM |
+| LSTM隠れ層サイズ | 128 |
+| LSTM層数 | 2 |
+| Dropout | 0.3 |
+| 総パラメータ数 | 1,250,000 |
+| 入力シーケンス長 | 360 (6時間) |
+| 出力ヘッド数 | 2 (方向 + 価格幅) |
+
+## ⚙️ ハイパーパラメータ
+
+| 項目 | 値 |
+|-----|-----|
+| 学習率 | 0.001 |
+| バッチサイズ | 512 |
+| エポック数 | 100 |
+| Early Stopping | 10 epoch |
+| 損失重み (方向) | 0.52 |
+| 損失重み (価格幅) | 0.48 |
+
+## 📈 ベストフォールド詳細 (Fold 3)
+
+| メトリクス | 値 |
+|----------|-----|
+| 検証損失 | 0.412 |
+| 方向精度 | 72.0% |
+| 価格幅MAE | 8.5 pips |
+| NEUTRAL比率 | 28.0% |
+| 学習エポック | 92 |
+
+## ⚙️ パフォーマンス
+
+- **総学習時間**: 12,588秒 (3時間29分48秒)
+- **平均エポック時間**: 145秒
+- **ピークメモリ**: 16,000 MB
+
+## 🔐 再現性情報
+
+- **Seed**: 42
+- **Git Commit**: a1b2c3d4
+- **Config Hash**: sha256:...
+- **PyTorch**: 2.8.0
+- **CUDA**: 12.8
+
+## ⚠️ 警告・注意事項
+
+- Fold 1 の精度が他より低い（初期データの市場特性差異）
+- Fold 5 は短期間のため参考値
+- NEUTRAL比率が28%（許容範囲内）
+
+## ✅ 検証結果
+
+- ✅ WFV全フォールド完了
+- ✅ 過学習なし（Early Stopping機能）
+- ✅ 方向精度70%以上達成
+- ✅ モデル保存完了
+```
+
+---
+
 ## 📝 ログ出力
 
 ### 時刻表示ルール
 - **全ログ**: 日本時間(JST)で表示
 - **フォーマット**: `YYYY-MM-DD HH:MM:SS JST`
 - **学習開始/終了時刻**: 日本時間で明記
+- **詳細**: [TIMEZONE_UTILS_SPEC.md](./utils/TIMEZONE_UTILS_SPEC.md)
 
 ```
 🔄 第4段階: 学習開始 [2025-10-24 00:15:30 JST]

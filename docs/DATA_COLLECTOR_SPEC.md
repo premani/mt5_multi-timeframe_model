@@ -1,7 +1,7 @@
 # DATA_COLLECTOR_SPEC.md
 
-**バージョン**: 1.0
-**更新日**: 2025-10-21
+**バージョン**: 2.0
+**更新日**: 2025-10-23
 **責任者**: core-team
 **処理段階**: 第1段階: データ収集
 
@@ -9,28 +9,61 @@
 
 ## 📋 目的
 
-`src/data_collector.py` がマルチタイムフレーム (M1/M5/M15/H1/H4) のバーデータと直近期間のTickデータを収集し、UTC整合・欠損補完・品質保証を行い、HDF5形式で保存する。
+`src/data_collector.py` が **MT5 API Server** (HTTP/REST) 経由でマルチタイムフレーム (M1/M5/M15/H1/H4) のバーデータとTickデータ（Ask/Bid時系列）を収集し、UTC整合・品質保証を行い、HDF5形式で保存する。
+
+**設計方針**:
+- **完全データ収集**: バーデータ + 全期間Tickデータを一度に取得
+- **MT5 API Server経由**: HTTP/REST APIで安定した接続
+- **旧プロジェクト踏襲**: 実績のある `mt5_lstm-model` の実装パターンを継承
+- **容量想定**: 7年間で約9-10 GB（圧縮なし）、2-3 GB（圧縮あり）
 
 ---
 
 ## 🎯 スコープ
 
-### 対象
-- **タイムフレーム**: M1, M5, M15, H1, H4
-- **データ項目**: OHLCV, spread (snapshot/min/max), tick_volume
-- **Tick**: 直近期間のTick詳細（時刻、bid/ask、volume、フラグ）
-- **補助系列**: mid_price, ATR14キャッシュ（欠損判定用）, session_flag
-- **シンボル**: USDJPY (初期、複数シンボルへ拡張可能)
-- **圧縮**: 無効（処理速度優先）
+### ✅ 実装範囲
 
-**重要**: ATR14キャッシュはデータ品質チェック用の補助情報。**特徴量としては第2段階で正式に計算される。**
+**バーデータ（OHLC）**:
+- **タイムフレーム**: M1, M5, M15, H1, H4
+- **データ項目**: time, open, high, low, close, tick_volume, spread, real_volume
+- **型**: time(int64), OHLC(float32), volumes(float32)
+
+**Tickデータ（Ask/Bid時系列）**:
+- **データ項目**: time, time_msc, bid, ask, last, volume, flags
+- **型**: time/time_msc(int64), bid/ask/last(float32), volume/flags(int32)
+- **取得方法**: MT5 API Server `/ticks` エンドポイント（新規実装必要）
+
+**接続方式**: MT5 API Server（HTTP/REST）
+- **バーデータ**: `POST /historical` エンドポイント
+- **Tickデータ**: `POST /ticks` エンドポイント（追加実装）
+- **認証**: Bearer Token（環境変数 `MT5_API_KEY`）
+- **タイムアウト**: 60秒（環境変数 `MT5_API_TIMEOUT` で変更可能）
+
+**対象シンボル**: USDJPY（初期、複数シンボルへ拡張可能）  
+**時刻管理**: MT5から返されるUTCタイムスタンプをそのまま使用  
+**圧縮**: 無効（処理速度優先、学習用は別途圧縮版作成）
+
+**重要**: 
+- ATR14等の特徴量は**第2段階で正式に計算**（第1段階ではキャッシュしない）
+- Tickデータは全期間保存（7年間で約9-10 GB想定）
 
 ### 時刻管理方針
 
-#### 内部保持形式
-- **全データ**: UTC統一で保存
-- **HDF5内time列**: UTC UNIXタイムスタンプ(秒)
-- **理由**: タイムゾーン変換の複雑性を排除、国際標準との整合性
+#### MT5 API Serverからの時刻データ
+- **返却形式**: UNIXタイムスタンプ（秒またはミリ秒）
+- **タイムゾーン**: MT5が返すタイムスタンプは **既にUTC**
+  - `mt5.copy_rates_range()` → `time`: UTCエポック秒
+  - `mt5.copy_ticks_range()` → `time`: UTCエポック秒、`time_msc`: UTCエポックミリ秒
+  - ブローカータイムゾーン設定に関わらず、常にUTC基準
+- **変換不要**: API ServerからのレスポンスをそのままHDF5に保存
+
+#### HDF5内部保存形式
+- **バーデータ**: `time` 列(int64, UTCエポック秒)
+- **Tickデータ**: `time` 列(int64, 秒), `time_msc` 列(int64, ミリ秒)
+- **理由**: 
+  - タイムゾーン変換の複雑性を排除
+  - 国際標準との整合性
+  - ミリ秒精度でTickの正確な順序保証
 
 #### ログ・レポート表示形式
 - **ログ出力**: 日本時間(JST, UTC+9)で表示
@@ -52,29 +85,156 @@ logger.info(f"データ収集完了: {timestamp_jst.strftime('%Y-%m-%d %H:%M:%S 
 - **期間表示**: 開始/終了とも日本時間で明記
 - **タイムゾーン表記**: 必ず`JST`サフィックスを付与
 
-### 非対象（Phase 0）
+### 非対象
 - 板情報（Depth）・DOM履歴
 - 経済指標イベント
 - 約定履歴
+- spread_min/spread_max（MT5 API未対応、将来的にAPI拡張で追加検討）
 
 ---
 
 ## 📊 入出力
 
 ### 入力
-- MetaTrader5 API からブローカータイムのバーデータ
-- 直近期間のTickデータ
+
+**環境変数（.env）**:
+```bash
+MT5_API_KEY=mt5-api-2024-xK9mN7pQ3vR8sL2eW6tY0uI4oP1aS5dF
+MT5_API_ENDPOINT=http://192.168.50.172:8000
+MT5_API_TIMEOUT=60
+```
+
+**MT5 API Server - バーデータエンドポイント**:
+```http
+POST /historical
+Authorization: Bearer {MT5_API_KEY}
+Content-Type: application/json
+
+{
+  "symbol": "USDJPY",
+  "timeframe": "M5",
+  "start": "2024-01-01T00:00:00",
+  "end": "2024-12-31T23:59:59",
+  "limit": 0
+}
+```
+
+**レスポンス**:
+```json
+{
+  "total": 105120,
+  "count": 105120,
+  "offset": 0,
+  "data": [
+    {
+      "time": 1704067200,
+      "open": 141.234,
+      "high": 141.256,
+      "low": 141.212,
+      "close": 141.245,
+      "tick_volume": 1234,
+      "spread": 3,
+      "real_volume": 0
+    }
+  ]
+}
+```
+
+**MT5 API Server - Tickデータエンドポイント（新規実装）**:
+```http
+POST /ticks
+Authorization: Bearer {MT5_API_KEY}
+Content-Type: application/json
+
+{
+  "symbol": "USDJPY",
+  "start": "2024-01-01T00:00:00",
+  "end": "2024-12-31T23:59:59",
+  "tick_type": "INFO",
+  "limit": 0
+}
+```
+
+**レスポンス**:
+```json
+{
+  "total": 36000000,
+  "count": 36000000,
+  "offset": 0,
+  "data": [
+    {
+      "time": 1704067200,
+      "time_msc": 1704067200123,
+      "bid": 141.234,
+      "ask": 141.237,
+      "last": 0.0,
+      "volume": 0,
+      "flags": 6
+    }
+  ]
+}
+```
+
+**データ型変換**:
+- `time`: int64（UTCエポック秒）
+- `time_msc`: int64（UTCエポックミリ秒）
+- `open/high/low/close/bid/ask`: float32
+- `tick_volume/spread/real_volume`: float32
+- `volume/flags`: int32
 
 ### 出力
-HDF5ファイル: `models/<timestamp>_raw_<symbol>.h5` (Git管理外)
 
-**バーデータ格納**:
+---
+
+## 📦 出力データ仕様
+
+### 出力ファイル
+
+| ファイル | 用途 | 既存ファイル処理 |
+|---------|------|----------------|
+| `data/data_collector.h5` | HDF5データ（バーデータ + Tickデータ） | JST日時プレフィックス付きリネーム |
+| `data/data_collector_report.json` | 統計情報（次処理の入力パラメータ） | JST日時プレフィックス付きリネーム |
+| `data/data_collector_report.md` | 人間可読レポート（検証用） | JST日時プレフィックス付きリネーム |
+
+**既存ファイル処理例**:
+- 既存: `data/data_collector.h5` (最終更新: 2025-10-23 14:30:45 JST)
+- リネーム: `data/20251023_143045_data_collector.h5`
+- リネーム: `data/20251023_143045_data_collector_report.json`
+- リネーム: `data/20251023_143045_data_collector_report.md`
+- 新規作成: `data/data_collector.h5`, `data/data_collector_report.json`, `data/data_collector_report.md`
+
+**HDF5構造**: `data/data_collector.h5`
+
+**HDF5構造**:
 ```
-/data/M1/{open, high, low, close, tick_volume, spread_snapshot, spread_min, spread_max, time}
-/data/M5/{open, high, low, close, tick_volume, spread_snapshot, spread_min, spread_max, time}
-/data/M15/{open, high, low, close, tick_volume, spread_snapshot, spread_min, spread_max, time}
-/data/H1/{open, high, low, close, tick_volume, spread_snapshot, spread_min, spread_max, time}
-/data/H4/{open, high, low, close, tick_volume, spread_snapshot, spread_min, spread_max, time}
+/M1/data: (N, 8) float32 [time, open, high, low, close, tick_volume, spread, real_volume]
+/M5/data: (N, 8) float32
+/M15/data: (N, 8) float32
+/H1/data: (N, 8) float32
+/H4/data: (N, 8) float32
+/ticks/data: (M, 7) mixed [time(int64), time_msc(int64), bid/ask/last(float32), volume/flags(int32)]
+/metadata: JSON文字列（収集条件、API endpoint、統計情報等）
+```
+
+**メタデータ例**:
+```json
+{
+  "symbol": "USDJPY",
+  "start_date": "2024-01-01",
+  "end_date": "2024-12-31",
+  "api_endpoint": "http://192.168.50.172:8000",
+  "collection_time": "2025-10-23T23:30:45+09:00",
+  "bar_counts": {
+    "M1": 525600,
+    "M5": 105120,
+    "M15": 35040,
+    "H1": 8760,
+    "H4": 2190
+  },
+  "tick_count": 36000000,
+  "file_size_mb": 9216
+}
+```
 ```
 
 **補助系列**:
@@ -204,6 +364,145 @@ if tz_stats['already_utc'] / total_count > 0.01:  # 1%超
 
 ### 6. HDF5保存
 バーデータ + Tick + 補助系列 + メタデータを保存
+
+```python
+# HDF5への保存例
+with h5py.File('data/data_collector.h5', 'w') as f:
+    # M1, M5, M15, H1, H4 バーデータ
+    for tf in ['M1', 'M5', 'M15', 'H1', 'H4']:
+        f.create_dataset(f'{tf}/data', data=bar_data[tf])
+    
+    # Tickデータ
+    f.create_dataset('ticks/data', data=tick_data)
+    
+    # メタデータ
+    f.attrs['symbol'] = 'USDJPY'
+    f.attrs['timezone'] = 'UTC'
+```
+
+### 7. レポート生成
+
+#### JSONレポート (`data/data_collector_report.json`)
+
+次処理（特徴量計算）が読み込むパラメータ情報:
+
+```json
+{
+  "timestamp": "2025-10-24T14:30:45+09:00",
+  "process": "data_collector",
+  "version": "1.0",
+  "input": {
+    "api_server": "http://192.168.50.172:8000",
+    "symbol": "USDJPY",
+    "period": {
+      "start": "2018-01-01T00:00:00Z",
+      "end": "2025-10-23T23:59:59Z"
+    }
+  },
+  "output": {
+    "file": "data/data_collector.h5",
+    "size_mb": 9500
+  },
+  "timeframes": {
+    "M1": {
+      "bars": 2500000,
+      "missing_count": 5000,
+      "missing_rate": 0.002,
+      "period": {"start": "2018-01-01T00:00:00Z", "end": "2025-10-23T23:59:59Z"}
+    },
+    "M5": {
+      "bars": 500000,
+      "missing_count": 500,
+      "missing_rate": 0.001,
+      "period": {"start": "2018-01-01T00:00:00Z", "end": "2025-10-23T23:59:59Z"}
+    },
+    "M15": {"bars": 166666, "missing_count": 150, "missing_rate": 0.0009},
+    "H1": {"bars": 41666, "missing_count": 30, "missing_rate": 0.0007},
+    "H4": {"bars": 10416, "missing_count": 5, "missing_rate": 0.0005}
+  },
+  "ticks": {
+    "count": 15000000,
+    "storage_mb": 9000,
+    "period": {"start": "2018-01-01T00:00:00Z", "end": "2025-10-23T23:59:59Z"}
+  },
+  "quality": {
+    "duplicates_removed": 0,
+    "timestamp_errors": 0,
+    "monotonic_check": "passed",
+    "spread_outliers": 12
+  },
+  "performance": {
+    "execution_time_sec": 1200,
+    "api_requests": 150,
+    "avg_request_time_ms": 800
+  }
+}
+```
+
+#### Markdownレポート (`data/data_collector_report.md`)
+
+人間による検証用の可読レポート:
+
+```markdown
+# データ収集 実行レポート
+
+**実行日時**: 2025-10-24 14:30:45 JST  
+**処理時間**: 20分00秒  
+**バージョン**: 1.0
+
+## 📊 入力
+
+- **MT5 API Server**: http://192.168.50.172:8000
+- **通貨ペア**: USDJPY
+- **期間**: 2018-01-01 00:00:00 UTC ～ 2025-10-23 23:59:59 UTC (7年間)
+
+## 🎯 処理結果
+
+- **出力ファイル**: `data/data_collector.h5`
+- **ファイルサイズ**: 9,500 MB
+
+### タイムフレーム別統計
+
+| TF | バー数 | 欠損数 | 欠損率 | 期間 |
+|----|--------|--------|--------|------|
+| M1 | 2,500,000 | 5,000 | 0.20% | 2018-01-01 ～ 2025-10-23 |
+| M5 | 500,000 | 500 | 0.10% | 2018-01-01 ～ 2025-10-23 |
+| M15 | 166,666 | 150 | 0.09% | 2018-01-01 ～ 2025-10-23 |
+| H1 | 41,666 | 30 | 0.07% | 2018-01-01 ～ 2025-10-23 |
+| H4 | 10,416 | 5 | 0.05% | 2018-01-01 ～ 2025-10-23 |
+
+### Tickデータ統計
+
+- **Tick数**: 15,000,000
+- **ストレージ**: 9,000 MB
+- **期間**: 2018-01-01 ～ 2025-10-23
+
+## 📈 品質統計
+
+| 項目 | 値 |
+|-----|-----|
+| 重複除去数 | 0 |
+| タイムスタンプエラー | 0 |
+| 単調性チェック | ✅ 合格 |
+| スプレッド外れ値 | 12 |
+
+## ⚙️ パフォーマンス
+
+- **API リクエスト数**: 150回
+- **平均レスポンス時間**: 800ms
+
+## ⚠️ 警告・注意事項
+
+- M1の欠損率が0.20%（許容範囲内）
+- スプレッド外れ値12件を除外（Flash Crash等）
+
+## ✅ 検証結果
+
+- ✅ 全タイムフレームの単調性チェック合格
+- ✅ 重複データなし
+- ✅ タイムスタンプ整合性確認
+- ✅ Tickデータ品質良好
+```
 
 ---
 
@@ -344,10 +643,11 @@ data_collection:
 
 1. **圧縮設定**: 推論用は無効（速度優先）、学習用は有効（gzip level 4）
 2. **Git管理外**: `data/*.h5` はGitignore対象
-3. **エラー握りつぶし禁止**: 異常検出時は必ず `raise` で停止
-4. **シンボル拡張**: 複数シンボル対応は設計済み（config で切替可能）
-5. **D1バー**: 取得せず、必要時はH4から派生サマリ生成
-6. **ストレージ分離**: 学習用(3ヶ月)と推論用(24時間)で別ファイル管理（STORAGE_POLICY_SPEC.md参照）
+3. **既存ファイル自動退避**: 処理実行時、既存ファイルはJST日時プレフィックス付きで自動保存
+4. **エラー握りつぶし禁止**: 異常検出時は必ず `raise` で停止
+5. **シンボル拡張**: 複数シンボル対応は設計済み（config で切替可能）
+6. **D1バー**: 取得せず、必要時はH4から派生サマリ生成
+7. **ストレージ分離**: 学習用(3ヶ月)と推論用(24時間)で別ファイル管理（STORAGE_POLICY_SPEC.md参照）
 
 ---
 
