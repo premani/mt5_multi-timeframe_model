@@ -224,9 +224,10 @@ class DataCollector:
         Returns:
             numpy配列 (N, 8) [time, open, high, low, close, tick_volume, spread, real_volume]
         """
-        return np.array([
+        # タイムスタンプはint64、価格・出来高はfloat32で保存
+        time_col = np.array([bar['time'] for bar in bars], dtype=np.int64).reshape(-1, 1)
+        price_cols = np.array([
             [
-                bar['time'],
                 bar['open'],
                 bar['high'],
                 bar['low'],
@@ -237,6 +238,9 @@ class DataCollector:
             ]
             for bar in bars
         ], dtype=np.float32)
+        
+        # 結合 (N, 8)
+        return np.hstack([time_col, price_cols])
     
     def _validate_bars(
         self,
