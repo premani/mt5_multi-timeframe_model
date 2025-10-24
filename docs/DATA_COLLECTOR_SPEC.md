@@ -26,7 +26,10 @@
 **バーデータ（OHLC）**:
 - **タイムフレーム**: M1, M5, M15, H1, H4
 - **データ項目**: time, open, high, low, close, tick_volume, spread, real_volume
-- **型**: time(int64), OHLC(float32), volumes(float32)
+- **型**: time(**int64**), OHLC(float32), volumes(float32)
+  - ⚠️ **タイムスタンプは必ずint64**: float32では精度不足で単調性違反が発生
+  - UNIX時間は10桁、float32の精度は約7桁（仮数部23ビット）
+  - 実装時は`np.hstack([time_col(int64), price_cols(float32)])`で結合
 
 **Tickデータ（Ask/Bid時系列）**:
 - **データ項目**: time, time_msc, bid, ask, last, volume, flags
@@ -176,11 +179,28 @@ Content-Type: application/json
 ```
 
 **データ型変換**:
-- `time`: int64（UTCエポック秒）
-- `time_msc`: int64（UTCエポックミリ秒）
-- `open/high/low/close/bid/ask`: float32
+- `time`: **int64**（UTCエポック秒）
+  - ⚠️ **重要**: float32では精度不足（仮数部23ビット ≈ 7桁、UNIX時間は10桁）
+  - float32に変換すると丸め誤差で単調性違反が発生
+  - 必ずint64で保持すること
+- `time_msc`: **int64**（UTCエポックミリ秒）
+- `open/high/low/close/bid/ask`: float32（価格は有効桁数5-6桁で十分）
 - `tick_volume/spread/real_volume`: float32
 - `volume/flags`: int32
+
+**実装例（正）**:
+```python
+# タイムスタンプはint64で分離保持
+time_col = np.array([bar['time'] for bar in bars], dtype=np.int64)
+price_cols = np.array([[bar['open'], bar['high'], ...] for bar in bars], dtype=np.float32)
+return np.hstack([time_col.reshape(-1, 1), price_cols])
+```
+
+**実装例（誤）**:
+```python
+# ❌ 全データをfloat32に変換 → タイムスタンプ精度損失
+return np.array([[bar['time'], bar['open'], ...] for bar in bars], dtype=np.float32)
+```
 
 ### 出力
 
@@ -207,14 +227,22 @@ Content-Type: application/json
 
 **HDF5構造**:
 ```
-/M1/data: (N, 8) float32 [time, open, high, low, close, tick_volume, spread, real_volume]
-/M5/data: (N, 8) float32
-/M15/data: (N, 8) float32
-/H1/data: (N, 8) float32
-/H4/data: (N, 8) float32
-/ticks/data: (M, 7) mixed [time(int64), time_msc(int64), bid/ask/last(float32), volume/flags(int32)]
+/M1/data: (N, 8) mixed dtype
+  - 列0: time (int64) - タイムスタンプ
+  - 列1-7: OHLC, volumes, spread (float32)
+/M5/data: (N, 8) mixed dtype（同上）
+/M15/data: (N, 8) mixed dtype（同上）
+/H1/data: (N, 8) mixed dtype（同上）
+/H4/data: (N, 8) mixed dtype（同上）
+/ticks/data: (M, 7) structured array
+  - time(int64), time_msc(int64), bid/ask/last(float32), volume/flags(int32)
 /metadata: JSON文字列（収集条件、API endpoint、統計情報等）
 ```
+
+**注意**: 
+- バーデータの実際の配列は`np.hstack([time_col(int64), price_cols(float32)])`の結果
+- HDF5に保存時は混合型として格納されるが、各列の型は保持される
+- 読み込み時は`data[:, 0].astype(np.int64)`でタイムスタンプを取得
 
 **メタデータ例**:
 ```json
