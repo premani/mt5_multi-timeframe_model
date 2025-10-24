@@ -82,11 +82,11 @@ class HDF5Writer:
             if dataset_path in f:
                 del f[dataset_path]
             
+            # dtypeを指定せず、入力データの型を保持
             f.create_dataset(
                 dataset_path,
                 data=data,
-                compression=self.compression,
-                dtype=np.float32
+                compression=self.compression
             )
             
             self._log('debug', f"💾 {timeframe}バーデータ保存: {data.shape}")
