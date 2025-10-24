@@ -11,6 +11,18 @@ import numpy as np
 import json
 from datetime import datetime, timezone
 
+# バーデータのカラムインデックス定義（collector.pyと同期）
+BAR_COLUMNS = {
+    'time': 0,
+    'open': 1,
+    'high': 2,
+    'low': 3,
+    'close': 4,
+    'tick_volume': 5,
+    'spread': 6,
+    'real_volume': 7
+}
+
 def format_timestamp(ts: float) -> str:
     """UNIX時刻をISO8601形式に変換（UTC+9 JST）"""
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
@@ -59,12 +71,12 @@ def inspect_timeframe(file_path: Path, tf: str, sample_size: int = 5):
         data = f[tf]['data']
         print(f"\n📊 {tf}データ: shape={data.shape}")
         print("-" * 80)
-        
+
         # 統計情報
-        timestamps = data[:, 0]
+        timestamps = data[:, BAR_COLUMNS['time']]
         print(f"  件数: {len(data):,}件")
         print(f"  期間: {format_timestamp(timestamps[0])} ~ {format_timestamp(timestamps[-1])}")
-        
+
         # 単調性チェック
         diffs = np.diff(timestamps)
         non_monotonic = np.sum(diffs <= 0)
@@ -72,20 +84,24 @@ def inspect_timeframe(file_path: Path, tf: str, sample_size: int = 5):
             print(f"  ⚠️  単調性違反: {non_monotonic}件")
         else:
             print(f"  ✅ 単調性: OK")
-        
+
         # 重複チェック
         duplicates = len(timestamps) - len(np.unique(timestamps))
         if duplicates > 0:
             print(f"  ⚠️  重複: {duplicates}件")
         else:
             print(f"  ✅ 重複: なし")
-        
+
         # サンプルデータ表示
         print(f"\n  最初の{sample_size}件:")
         for i in range(min(sample_size, len(data))):
             row = data[i]
-            ts = format_timestamp(row[0])
-            print(f"    [{i}] {ts} | O={row[1]:.3f} H={row[2]:.3f} L={row[3]:.3f} C={row[4]:.3f}")
+            ts = format_timestamp(row[BAR_COLUMNS['time']])
+            print(f"    [{i}] {ts} | "
+                  f"O={row[BAR_COLUMNS['open']]:.3f} "
+                  f"H={row[BAR_COLUMNS['high']]:.3f} "
+                  f"L={row[BAR_COLUMNS['low']]:.3f} "
+                  f"C={row[BAR_COLUMNS['close']]:.3f}")
 
 def inspect_ticks(file_path: Path, sample_size: int = 5):
     """Tickデータを表示"""

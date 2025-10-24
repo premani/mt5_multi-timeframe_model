@@ -58,8 +58,8 @@ class LoggingManager:
         console_handler.setFormatter(console_formatter)
         self.logger.addHandler(console_handler)
         
-        # ファイルハンドラー
-        log_file = self.log_dir / f"{name}_{self._get_timestamp_str()}.log"
+        # ファイルハンドラー（タイムスタンプ + 処理名の順序）
+        log_file = self.log_dir / f"{self._get_timestamp_str()}_{name}.log"
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(getattr(logging, level.upper()))
         file_formatter = logging.Formatter(
@@ -100,22 +100,22 @@ class LoggingManager:
         """ロガーインスタンス取得"""
         return self.logger
     
-    def info(self, msg: str):
+    def info(self, msg: str) -> None:
         """INFOログ出力"""
         self.logger.info(msg)
-    
-    def debug(self, msg: str):
+
+    def debug(self, msg: str) -> None:
         """DEBUGログ出力"""
         self.logger.debug(msg)
-    
-    def warning(self, msg: str):
+
+    def warning(self, msg: str) -> None:
         """WARNINGログ出力"""
         self.logger.warning(msg)
-    
-    def error(self, msg: str):
+
+    def error(self, msg: str) -> None:
         """ERRORログ出力"""
         self.logger.error(msg)
-    
-    def critical(self, msg: str):
+
+    def critical(self, msg: str) -> None:
         """CRITICALログ出力"""
         self.logger.critical(msg)

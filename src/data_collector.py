@@ -22,10 +22,14 @@ from src.data_collector.collector import DataCollector
 
 def main():
     """メイン処理"""
+    # 警告を標準エラー出力に表示
+    import warnings
+    warnings.filterwarnings('default')
+
     try:
         # 設定読み込み
         config = ConfigManager()
-        
+
         # ロガー初期化
         logger = LoggingManager(
             name='data_collector',
@@ -33,7 +37,7 @@ def main():
             level=config.get('logging.level', 'INFO'),
             timezone_name=config.get('logging.timezone', 'Asia/Tokyo')
         )
-        
+
         logger.info("=" * 60)
         logger.info("🚀 MT5データ収集開始")
         logger.info("=" * 60)

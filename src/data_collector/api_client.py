@@ -14,7 +14,7 @@ class MT5APIClient:
         self,
         endpoint: str,
         api_key: str,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
         logger=None
     ):
         """
@@ -23,7 +23,7 @@ class MT5APIClient:
         Args:
             endpoint: API ServerのエンドポイントURL
             api_key: 認証用APIキー
-            timeout: リクエストタイムアウト（秒）
+            timeout: リクエストタイムアウト（秒、None=無制限）
             logger: ロガーインスタンス
         """
         self.endpoint = endpoint.rstrip('/')
@@ -46,7 +46,7 @@ class MT5APIClient:
             'Content-Type': 'application/json'
         }
     
-    def _log(self, level: str, msg: str):
+    def _log(self, level: str, msg: str) -> None:
         """ログ出力"""
         if self.logger:
             getattr(self.logger, level)(msg)
