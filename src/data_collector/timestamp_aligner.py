@@ -13,6 +13,18 @@ from datetime import timezone
 class TimestampAligner:
     """タイムスタンプ整合クラス"""
     
+    # バーデータのカラムインデックス定義（collector.pyと同じ）
+    BAR_COLUMNS = {
+        'time': 0,
+        'open': 1,
+        'high': 2,
+        'low': 3,
+        'close': 4,
+        'tick_volume': 5,
+        'spread': 6,
+        'real_volume': 7
+    }
+    
     def __init__(self, logger):
         """
         Args:
@@ -20,15 +32,15 @@ class TimestampAligner:
         """
         self.logger = logger
     
-    def align_to_m1(self, raw_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    def align_to_m1(self, raw_data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         """
         全TFをM1基準に整合
         
         Args:
-            raw_data: {TF: DataFrame} の辞書
+            raw_data: {TF: numpy配列(N, 8)} の辞書
         
         Returns:
-            整合後の {TF: DataFrame} 辞書（全て同じ行数）
+            整合後の {TF: numpy配列(M, 8)} 辞書（全て同じ行数）
         """
         self.logger.info("🔄 タイムスタンプ整合開始")
         
@@ -36,8 +48,12 @@ class TimestampAligner:
         if 'M1' not in raw_data:
             raise ValueError("M1データが必要です")
         
-        m1_data = raw_data['M1']
-        m1_times = pd.to_datetime(m1_data['time'], unit='s', utc=True)
+        m1_array = raw_data['M1']
+        m1_times = pd.to_datetime(
+            m1_array[:, self.BAR_COLUMNS['time']].astype(np.int64), 
+            unit='s', 
+            utc=True
+        )
         
         self.logger.info(f"   基準時刻: M1 ({len(m1_times):,}行)")
         self.logger.info(f"   期間: {m1_times.min()} ～ {m1_times.max()}")
@@ -46,8 +62,7 @@ class TimestampAligner:
         aligned_data = {}
         
         # M1はそのまま
-        aligned_data['M1'] = m1_data.copy()
-        aligned_data['M1']['time'] = m1_times
+        aligned_data['M1'] = m1_array.copy()
         
         # 他のTFを整合
         for tf in ['M5', 'M15', 'H1', 'H4']:
@@ -64,45 +79,55 @@ class TimestampAligner:
         self.logger.info("✅ タイムスタンプ整合完了")
         
         # 整合結果サマリ
-        for tf, df in aligned_data.items():
-            self.logger.info(f"   {tf}: {len(df):,}行（整合後）")
+        for tf, arr in aligned_data.items():
+            self.logger.info(f"   {tf}: {len(arr):,}行（整合後）")
         
         return aligned_data
     
     def _align_single_tf(
         self, 
-        tf_data: pd.DataFrame, 
+        tf_array: np.ndarray, 
         m1_times: pd.Series,
         tf_name: str
-    ) -> pd.DataFrame:
+    ) -> np.ndarray:
         """
         単一TFをM1時刻に整合
         
         Args:
-            tf_data: 整合対象のDataFrame
+            tf_array: 整合対象のnumpy配列 (N, 8)
             m1_times: M1の時刻Series
             tf_name: TF名（ログ用）
         
         Returns:
-            整合後のDataFrame
+            整合後のnumpy配列 (M, 8)
         """
         # TFのタイムスタンプをdatetimeに変換
-        tf_times = pd.to_datetime(tf_data['time'], unit='s', utc=True)
+        tf_times = pd.to_datetime(
+            tf_array[:, self.BAR_COLUMNS['time']].astype(np.int64),
+            unit='s', 
+            utc=True
+        )
         
-        # timeをインデックスに設定
-        tf_indexed = tf_data.copy()
-        tf_indexed.index = tf_times
+        # DataFrameに変換（reindexのため）
+        tf_df = pd.DataFrame(
+            tf_array,
+            columns=['time', 'open', 'high', 'low', 'close', 
+                    'tick_volume', 'spread', 'real_volume']
+        )
+        tf_df.index = tf_times
         
         # M1の時刻に再インデックス（前方補完）
-        aligned = tf_indexed.reindex(m1_times, method='ffill')
+        aligned_df = tf_df.reindex(m1_times, method='ffill')
         
-        # timeカラムをM1基準に更新
-        aligned['time'] = m1_times
-        aligned = aligned.reset_index(drop=True)
+        # timeカラムをM1基準に更新（UNIX秒に戻す）
+        aligned_df['time'] = m1_times.astype(np.int64) // 10**9
+        
+        # numpy配列に戻す
+        aligned_array = aligned_df.values.astype(np.float64)
         
         # 補完統計
-        original_rows = len(tf_data)
-        aligned_rows = len(aligned)
+        original_rows = len(tf_array)
+        aligned_rows = len(aligned_array)
         filled_ratio = (aligned_rows - original_rows) / aligned_rows * 100
         
         self.logger.info(
@@ -110,4 +135,4 @@ class TimestampAligner:
             f"(補完率: {filled_ratio:.1f}%)"
         )
         
-        return aligned
+        return aligned_array
