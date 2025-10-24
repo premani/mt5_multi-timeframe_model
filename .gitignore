@@ -240,6 +240,7 @@ secrets/
 !.env.template
 
 # --- コンフィグ運用ファイル（テンプレートのみGit管理） ---
+config/data_collector.yaml
 config/data_mt5_collect.yaml
 config/data_mt5_purification.yaml
 config/features_calculate.yaml
