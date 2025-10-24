@@ -80,9 +80,12 @@ class MT5APIClient:
             'symbol': symbol,
             'timeframe': timeframe,
             'start': start,
-            'end': end,
-            'limit': limit
+            'end': end
         }
+        
+        # limitは0以外の場合のみ追加（0=無制限はAPIが受け付けない）
+        if limit > 0:
+            payload['limit'] = limit
         
         self._log('debug', f"📡 バーデータ取得: {symbol} {timeframe} {start} ～ {end}")
         

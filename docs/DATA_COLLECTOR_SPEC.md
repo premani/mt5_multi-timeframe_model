@@ -689,3 +689,60 @@ data_collection:
 - 派生日次サマリ自動生成
 - volume-bar / imbalance-bar保存
 - order flow proxy解析
+
+---
+
+## 🔧 検査ツール
+
+### inspect_hdf5.py
+
+**パス**: `tools/data_collector/inspect_hdf5.py`
+
+**目的**: データ収集結果のHDF5ファイルを検査し、データ品質を確認。
+
+**使用方法**:
+```bash
+# デフォルト実行（構造とメタデータのみ）
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py
+
+# 特定ファイル指定
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py data/20251024_120809_data_collector.h5
+
+# M1タイムフレーム詳細表示（サンプル5件）
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py --timeframe M1
+
+# 全タイムフレーム表示（サンプル3件）
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py --all -n 3
+
+# Tickデータ表示
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py --ticks
+
+# ヘルプ表示
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py --help
+```
+
+**主な機能**:
+- HDF5構造表示（グループ、データセット、shape、dtype）
+- メタデータ表示（JSON形式パース）
+- タイムフレーム別統計（件数、期間、単調性、重複チェック）
+- Tickデータ統計とサンプル表示
+- タイムスタンプ精度問題の検出（float32精度損失警告）
+
+**検出される問題**:
+- ⚠️ タイムスタンプ単調性違反（float32精度問題）
+- ⚠️ 重複レコード
+- ✅ 正常データには緑チェックマーク表示
+
+**トラブルシューティング**:
+
+タイムスタンプ精度問題の症状と解決:
+```
+症状: M1で大量の単調性違反（例: 196,949件）
+原因: データがfloat32形式で保存（UNIX時間10桁、float32は7桁精度）
+解決: 
+  1. src/data_collector/collector.py の _convert_bars_to_array() を確認
+  2. タイムスタンプ列をint64で分離保存していることを確認
+  3. データを再収集
+```
+
+````

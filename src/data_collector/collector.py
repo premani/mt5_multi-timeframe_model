@@ -87,12 +87,9 @@ class DataCollector:
         timeframes = self.config.get_required('data_collection.timeframes')
         period = self.config.get_required('data_collection.period')
         
-        # 日時をISO8601形式に変換
-        start_dt = datetime.fromisoformat(period['start']).replace(tzinfo=timezone.utc)
-        end_dt = datetime.fromisoformat(period['end']).replace(tzinfo=timezone.utc, hour=23, minute=59, second=59)
-        
-        start_iso = start_dt.isoformat()
-        end_iso = end_dt.isoformat()
+        # MT5 API ServerはYYYY-MM-DD形式を期待
+        start_date = period['start']
+        end_date = period['end']
         
         # 各通貨ペアについて処理
         for symbol in symbols:
@@ -100,14 +97,14 @@ class DataCollector:
             
             # バーデータ収集
             for tf in timeframes:
-                self._collect_bars(symbol, tf, start_iso, end_iso)
+                self._collect_bars(symbol, tf, start_date, end_date)
             
             # Tickデータ収集
             if self.config.get('data_collection.ticks.enabled', False):
-                self._collect_ticks(symbol, start_iso, end_iso)
+                self._collect_ticks(symbol, start_date, end_date)
         
         # メタデータ保存
-        self._save_metadata(symbols[0], start_iso, end_iso)
+        self._save_metadata(symbols[0], start_date, end_date)
         
         # レポート生成
         self._generate_reports()
