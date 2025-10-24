@@ -1,13 +1,36 @@
 # FEATURE_CALCULATOR_SPEC.md
 
-**バージョン**: 1.0
-**更新日**: 2025-10-22
+**バージョン**: 1.1
+**更新日**: 2025-10-24
 **責任者**: core-team
 **処理段階**: 第2段階: 特徴量計算
 
 ---
 
-## 📋 目的
+## � 変更履歴
+
+### v1.1 (2025-10-24)
+- **Phase 1-1完了**: 基本マルチTF特徴量 (36列) + セッション時間特徴量
+- **バックアップ機構実装**: 
+  - タイムスタンプ命名規則: `YYYYMMDD_HHMMSS_<basename>.<ext>` (先頭配置)
+  - 既存ファイルの作成日時でタイムスタンプ付与
+  - リネーム→新規作成フロー実装
+- **キャッシュ制御実装**: 
+  - `recalculate_categories` 設定による柔軟な制御
+  - デフォルト: 全カテゴリ再計算
+  - 開発中: 特定カテゴリのみ再計算可能
+- **カテゴリ別ファイル管理**: 
+  - `data/feature_calculator/` 固定ディレクトリ
+  - 毎回実行時にリネーム→新規作成
+
+### v1.0 (2025-10-22)
+- 初版作成
+- 5-7カテゴリ設計
+- 段階的検証フロー定義
+
+---
+
+## �📋 目的
 
 `src/feature_calculator.py` が**第1段階: データ収集で収集した生データ**から**価格回帰専用の特徴量**を計算する。
 
@@ -335,13 +358,45 @@ class BaseCalculator(ABC):
 | `data/feature_calculator_report.json` | カテゴリ別統計・検証結果 | ❌ 除外 |
 | `data/feature_calculator_report.md` | 人間可読レポート | ❌ 除外 |
 
-**バックアップ**: 既存ファイルは `YYYYMMDD_HHMMSS_feature_calculator*.<ext>` にリネーム (JST)
+**バックアップ**: 既存ファイルは `YYYYMMDD_HHMMSS_<basename>.<ext>` にリネーム (JST)
+- タイムスタンプ: **既存ファイルの作成日時**（リネーム実行時刻ではない）
+- 処理フロー: **既存ファイルをリネーム → 元のパスで新規作成**
 
 例: 
-- `20251024_143000_feature_calculator.h5`
-- `20251024_143000_feature_calculator/basic_multi_tf.h5`
+- 統合ファイル: `20251024_143000_feature_calculator.h5`（10/24 14:30に作成されたファイル）
+- レポート: `20251024_143000_feature_calculator_report.json`, `20251024_143000_feature_calculator_report.md`
+- カテゴリ別（ディレクトリ固定）: `data/feature_calculator/20251024_143000_basic_multi_tf.h5`
 
-**キャッシュ機構**: カテゴリ別ファイルが存在する場合は再計算をスキップ（増分更新）
+**処理詳細**:
+```python
+# 統合ファイルの例
+base_file = PROJECT_ROOT / "data" / "feature_calculator.h5"
+if base_file.exists():
+    # 既存ファイルの作成日時を取得
+    file_mtime = base_file.stat().st_mtime
+    file_dt = datetime.fromtimestamp(file_mtime, tz=timezone(timedelta(hours=9)))
+    timestamp_str = file_dt.strftime('%Y%m%d_%H%M%S')
+    backup_file = PROJECT_ROOT / "data" / f"{timestamp_str}_feature_calculator.h5"
+    base_file.rename(backup_file)  # リネーム
+    logger.info(f"既存ファイルリネーム: {backup_file.name}")
+
+# 新規ファイルは常に元のパスで保存
+output_file = base_file
+```
+
+**キャッシュ機構**: `config/feature_calculator.yaml` の `recalculate_categories` で制御
+- `recalculate_categories: null` → 全カテゴリ再計算（デフォルト）
+- `recalculate_categories: []` → 全カテゴリキャッシュ使用（計算なし）
+- `recalculate_categories: ['basic_multi_tf']` → 指定カテゴリのみ再計算、他はキャッシュ使用
+
+**カテゴリ別処理フロー**:
+1. 既存ファイルがあれば常にリネーム（バックアップ作成）
+2. `recalculate_categories` 設定を確認
+3. キャッシュ利用判定:
+   - `null`: 計算実行
+   - リスト指定あり && カテゴリ名がリストに含まれない: バックアップから読込
+   - リスト指定あり && カテゴリ名がリストに含まれる: 計算実行
+4. 計算実行の場合、元のパスで新規保存
 
 ---
 
@@ -660,7 +715,7 @@ Phase 2 (1%): 学習品質用
 ## ⚙️ 設定例
 
 ```yaml
-# config/feature_calculation.yaml
+# config/feature_calculator.yaml
 feature_calculation:
   # カテゴリ有効化
   enable_categories:
@@ -669,6 +724,12 @@ feature_calculation:
     volatility_regime: true
     momentum: true
     session_time: true
+  
+  # キャッシュ制御（新規追加）
+  # null: 全カテゴリ再計算（デフォルト）
+  # []: 全カテゴリキャッシュ使用（計算なし）
+  # ['basic_multi_tf', 'session_time']: 指定カテゴリのみ再計算、他はキャッシュ使用
+  recalculate_categories: null
   
   # 段階的検証
   incremental_validation:
@@ -686,6 +747,19 @@ feature_calculation:
   performance:
     max_calculation_time: 300  # 秒
     batch_size: null  # null=全データ一括
+```
+
+**使用例**:
+
+```yaml
+# 開発中: basic_multi_tfのみ再計算、他はキャッシュ使用
+recalculate_categories: ['basic_multi_tf']
+
+# 本番: 全カテゴリ再計算
+recalculate_categories: null
+
+# デバッグ: 全カテゴリキャッシュ使用（計算スキップ）
+recalculate_categories: []
 ```
 
 ---
@@ -1176,6 +1250,6 @@ logger.info(f"分類不明: {len(classification['unknown'])}列")
 
 ---
 
-**最終更新**: 2025-10-22  
+**最終更新**: 2025-10-24  
 **承認者**: (未承認)  
-**ステータス**: ドラフト
+**ステータス**: Phase 1-1実装完了（バックアップ・キャッシュ機構実装済み）
