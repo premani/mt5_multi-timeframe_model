@@ -160,11 +160,14 @@ class DataCollector:
         # HDF5保存
         self.hdf5_writer.write_bar_data(timeframe, bar_array)
         
-        # 統計記録
-        self.stats['timeframes'][timeframe] = {
+        # 統計記録（初回 or 更新）
+        if timeframe not in self.stats['timeframes']:
+            self.stats['timeframes'][timeframe] = {}
+        
+        self.stats['timeframes'][timeframe].update({
             'bars': len(bars),
             'period': {'start': start, 'end': end}
-        }
+        })
         
         self.logger.info(f"   ✅ {timeframe}: {len(bars)}件取得・保存完了")
     
@@ -273,10 +276,14 @@ class DataCollector:
             name=timeframe
         )
         
-        self.stats['timeframes'][timeframe] = {
+        # 統計記録（初回 or 更新）
+        if timeframe not in self.stats['timeframes']:
+            self.stats['timeframes'][timeframe] = {}
+        
+        self.stats['timeframes'][timeframe].update({
             'missing_count': missing_count,
             'missing_rate': gap_ratio
-        }
+        })
         
         # スプレッドチェック
         spreads = bar_array[:, 6]  # spread列
