@@ -10,6 +10,7 @@ import json
 from .api_client import MT5APIClient
 from .validator import DataValidator
 from .hdf5_writer import HDF5Writer
+from .timestamp_aligner import TimestampAligner
 
 
 class DataCollector:
@@ -116,9 +117,23 @@ class DataCollector:
         for symbol in symbols:
             self.logger.info(f"📊 {symbol} データ収集")
             
-            # バーデータ収集
+            # バーデータ収集（生データ）
+            raw_bar_data = {}
             for tf in timeframes:
-                self._collect_bars(symbol, tf, start_date, end_date)
+                bar_array = self._collect_bars(symbol, tf, start_date, end_date)
+                if bar_array is not None:
+                    raw_bar_data[tf] = bar_array
+            
+            # タイムスタンプ整合処理
+            if raw_bar_data:
+                self.logger.info("🔄 タイムスタンプ整合処理開始")
+                aligner = TimestampAligner(self.logger)
+                aligned_data = aligner.align_to_m1(raw_bar_data)
+                
+                # 整合済みデータをHDF5保存
+                for tf, aligned_array in aligned_data.items():
+                    self.hdf5_writer.write_bar_data(tf, aligned_array)
+                self.logger.info("✅ タイムスタンプ整合処理完了")
             
             # Tickデータ収集
             if self.config.get('data_collection.ticks.enabled', False):
@@ -145,7 +160,7 @@ class DataCollector:
         timeframe: str,
         start: str,
         end: str
-    ) -> None:
+    ) -> np.ndarray:
         """
         バーデータ収集
 
@@ -154,6 +169,9 @@ class DataCollector:
             timeframe: タイムフレーム
             start: 開始日時（ISO8601）
             end: 終了日時（ISO8601）
+        
+        Returns:
+            バーデータ配列 (N, 8) または None
         """
         self.logger.info(f"   📂 {timeframe}バーデータ取得中...")
         
@@ -167,7 +185,7 @@ class DataCollector:
         
         if not bars:
             self.logger.warning(f"   ⚠️  {timeframe}: データが取得できませんでした")
-            return
+            return None
         
         # numpy配列に変換
         bar_array = self._convert_bars_to_array(bars)
@@ -178,9 +196,6 @@ class DataCollector:
         # 品質検証
         self._validate_bars(timeframe, timestamps, bar_array)
         
-        # HDF5保存
-        self.hdf5_writer.write_bar_data(timeframe, bar_array)
-        
         # 統計記録（初回 or 更新）
         if timeframe not in self.stats['timeframes']:
             self.stats['timeframes'][timeframe] = {}
@@ -190,7 +205,9 @@ class DataCollector:
             'period': {'start': start, 'end': end}
         })
         
-        self.logger.info(f"   ✅ {timeframe}: {len(bars)}件取得・保存完了")
+        self.logger.info(f"   ✅ {timeframe}: {len(bars)}件取得完了")
+        
+        return bar_array
     
     def _collect_ticks(
         self,
