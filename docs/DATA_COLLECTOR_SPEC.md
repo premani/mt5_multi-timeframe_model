@@ -15,7 +15,10 @@
 - **完全データ収集**: バーデータ + 全期間Tickデータを一度に取得
 - **MT5 API Server経由**: HTTP/REST APIで安定した接続
 - **旧プロジェクト踏襲**: 実績のある `mt5_lstm-model` の実装パターンを継承
-- **容量想定**: 7年間で約9-10 GB（圧縮なし）、2-3 GB（圧縮あり）
+- **容量想定**: 
+  - 6ヶ月: 約491 MB（実測、圧縮なし）
+  - 7年: 約6.9 GB（推定、圧縮なし）
+  - 月分割取得: メモリ効率的（1ヶ月=約80MB）
 
 ---
 
@@ -26,18 +29,28 @@
 **バーデータ（OHLC）**:
 - **タイムフレーム**: M1, M5, M15, H1, H4
 - **データ項目**: time, open, high, low, close, tick_volume, spread, real_volume
-- **型**: time(int64), OHLC(float32), volumes(float32)
+- **型**: time(**int64**), OHLC(float32), volumes(float32)
+  - ⚠️ **タイムスタンプは必ずint64**: float32では精度不足で単調性違反が発生
+  - UNIX時間は10桁、float32の精度は約7桁（仮数部23ビット）
+  - 実装時は`np.hstack([time_col(int64), price_cols(float32)])`で結合
 
 **Tickデータ（Ask/Bid時系列）**:
 - **データ項目**: time, time_msc, bid, ask, last, volume, flags
 - **型**: time/time_msc(int64), bid/ask/last(float32), volume/flags(int32)
-- **取得方法**: MT5 API Server `/ticks` エンドポイント（新規実装必要）
+- **取得方法**: MT5 API Server `/ticks` エンドポイント
+- **月分割取得**: 1ヶ月以上の期間は月単位で分割取得し、HDF5に追記保存
+  - **理由**: 大量Tickデータ（1ヶ月=約200-400万件）のメモリ圧縮とタイムアウト回避
+  - **処理フロー**: 期間を月単位に分割 → 各月を順次取得 → HDF5に追記
+  - **初回クリーン**: バーデータ収集前に既存Tickデータを削除（重複防止）
+  - **タイムアウト**: 300秒（1ヶ月約60秒想定、5分の余裕）
 
 **接続方式**: MT5 API Server（HTTP/REST）
 - **バーデータ**: `POST /historical` エンドポイント
-- **Tickデータ**: `POST /ticks` エンドポイント（追加実装）
+- **Tickデータ**: `POST /ticks` エンドポイント
 - **認証**: Bearer Token（環境変数 `MT5_API_KEY`）
-- **タイムアウト**: 60秒（環境変数 `MT5_API_TIMEOUT` で変更可能）
+- **タイムアウト**: 
+  - バーデータ: 60秒（デフォルト）
+  - Tickデータ: 300秒（月分割取得用、環境変数 `MT5_API_TIMEOUT` で変更可能）
 
 **対象シンボル**: USDJPY（初期、複数シンボルへ拡張可能）  
 **時刻管理**: MT5から返されるUTCタイムスタンプをそのまま使用  
@@ -45,7 +58,8 @@
 
 **重要**: 
 - ATR14等の特徴量は**第2段階で正式に計算**（第1段階ではキャッシュしない）
-- Tickデータは全期間保存（7年間で約9-10 GB想定）
+- Tickデータは月分割で全期間保存（6ヶ月=491MB実測、7年=約6.9GB推定）
+- 月分割取得でメモリ効率化（1ヶ月=約80MB、タイムアウトリスク低減）
 
 ### 時刻管理方針
 
@@ -101,7 +115,7 @@ logger.info(f"データ収集完了: {timestamp_jst.strftime('%Y-%m-%d %H:%M:%S 
 ```bash
 MT5_API_KEY=mt5-api-2024-xK9mN7pQ3vR8sL2eW6tY0uI4oP1aS5dF
 MT5_API_ENDPOINT=http://192.168.50.172:8000
-MT5_API_TIMEOUT=60
+MT5_API_TIMEOUT=300  # Tick月分割取得用（1ヶ月約60秒、300秒=5分の余裕）
 ```
 
 **MT5 API Server - バーデータエンドポイント**:
@@ -176,11 +190,28 @@ Content-Type: application/json
 ```
 
 **データ型変換**:
-- `time`: int64（UTCエポック秒）
-- `time_msc`: int64（UTCエポックミリ秒）
-- `open/high/low/close/bid/ask`: float32
+- `time`: **int64**（UTCエポック秒）
+  - ⚠️ **重要**: float32では精度不足（仮数部23ビット ≈ 7桁、UNIX時間は10桁）
+  - float32に変換すると丸め誤差で単調性違反が発生
+  - 必ずint64で保持すること
+- `time_msc`: **int64**（UTCエポックミリ秒）
+- `open/high/low/close/bid/ask`: float32（価格は有効桁数5-6桁で十分）
 - `tick_volume/spread/real_volume`: float32
 - `volume/flags`: int32
+
+**実装例（正）**:
+```python
+# タイムスタンプはint64で分離保持
+time_col = np.array([bar['time'] for bar in bars], dtype=np.int64)
+price_cols = np.array([[bar['open'], bar['high'], ...] for bar in bars], dtype=np.float32)
+return np.hstack([time_col.reshape(-1, 1), price_cols])
+```
+
+**実装例（誤）**:
+```python
+# ❌ 全データをfloat32に変換 → タイムスタンプ精度損失
+return np.array([[bar['time'], bar['open'], ...] for bar in bars], dtype=np.float32)
+```
 
 ### 出力
 
@@ -207,14 +238,22 @@ Content-Type: application/json
 
 **HDF5構造**:
 ```
-/M1/data: (N, 8) float32 [time, open, high, low, close, tick_volume, spread, real_volume]
-/M5/data: (N, 8) float32
-/M15/data: (N, 8) float32
-/H1/data: (N, 8) float32
-/H4/data: (N, 8) float32
-/ticks/data: (M, 7) mixed [time(int64), time_msc(int64), bid/ask/last(float32), volume/flags(int32)]
+/M1/data: (N, 8) mixed dtype
+  - 列0: time (int64) - タイムスタンプ
+  - 列1-7: OHLC, volumes, spread (float32)
+/M5/data: (N, 8) mixed dtype（同上）
+/M15/data: (N, 8) mixed dtype（同上）
+/H1/data: (N, 8) mixed dtype（同上）
+/H4/data: (N, 8) mixed dtype（同上）
+/ticks/data: (M, 7) structured array
+  - time(int64), time_msc(int64), bid/ask/last(float32), volume/flags(int32)
 /metadata: JSON文字列（収集条件、API endpoint、統計情報等）
 ```
+
+**注意**: 
+- バーデータの実際の配列は`np.hstack([time_col(int64), price_cols(float32)])`の結果
+- HDF5に保存時は混合型として格納されるが、各列の型は保持される
+- 読み込み時は`data[:, 0].astype(np.int64)`でタイムスタンプを取得
 
 **メタデータ例**:
 ```json
@@ -261,6 +300,12 @@ Content-Type: application/json
 ---
 
 ## 🔄 処理フロー
+
+### 0. 初期化
+- 既存HDF5ファイルのバックアップ（JST日時プレフィックス付きリネーム）
+- 既存Tickデータのクリーン（`clear_tick_data()`実行）
+  - **重要**: バーデータ収集前に実行し、前回実行のTickデータ残留を防止
+  - **背景**: HDF5を`'a'`モードで開くと既存データが保持されるため、明示的削除が必要
 
 ### 1. データ取得
 各タイムフレームの生データをMT5 APIから取得
@@ -349,8 +394,15 @@ if tz_stats['already_utc'] / total_count > 0.01:  # 1%超
   - 休場（週末/祝日）: `trading_halt_mask` 付与
 - **詳細**: `docs/data_collector/TIMESTAMP_ALIGNMENT_SPEC.md`
 
-### 4. Tick処理
-- **単調性検査**: time 厳密増加
+### 4. Tick処理（月分割取得）
+- **期間分割**: 収集期間を月単位に分割（例: 2025-04-01～2025-09-30 → 6ヶ月）
+  - 実装: `dateutil.relativedelta` 使用、月初～月末のISO8601文字列生成
+- **月ごと取得**: 各月のTickデータをMT5 APIから取得
+  - タイムアウト: 300秒（1ヶ月約60秒、余裕を持たせた設定）
+- **HDF5追記保存**: 
+  - 初回: `create_dataset()` with `maxshape=(None,)` で可変長データセット作成
+  - 2回目以降: `dataset.resize()` で領域拡張後、データ追記
+- **単調性検査**: time 厳密増加（月ごとに検証）
 - **異常除去**: 重複、順序逆行
 - **マイクロ構造指標計算**:
   - `inter_arrival_ms` = 前tickとの時間差（ms）
@@ -365,6 +417,30 @@ if tz_stats['already_utc'] / total_count > 0.01:  # 1%超
 ### 6. HDF5保存
 バーデータ + Tick + 補助系列 + メタデータを保存
 
+**実装クラス**: `HDF5Writer`（`src/data_collector/hdf5_writer.py`）
+
+**クラス定数**:
+```python
+# Tickデータのフィールド定義（構造化配列用）
+TICK_DTYPE = [
+    ('time', 'i8'),
+    ('time_msc', 'i8'),
+    ('bid', 'f4'),
+    ('ask', 'f4'),
+    ('last', 'f4'),
+    ('volume', 'i4'),
+    ('flags', 'i4')
+]
+```
+
+**主要メソッド**:
+- `backup_existing()`: 既存ファイルをJST日時プレフィックス付きでリネーム
+- `clear_tick_data()`: 既存Tickデータセットを削除（月分割取得の初回クリーン用）
+- `write_bar_data()`: バーデータを保存（上書きモード）
+- `append_tick_data()`: Tickデータを追記（初回は `maxshape=(None,)` で作成、2回目以降は `resize()` + 追記）
+- `write_metadata()`: メタデータをJSON文字列として保存
+
+**保存例**:
 ```python
 # HDF5への保存例
 with h5py.File('data/data_collector.h5', 'w') as f:
@@ -372,8 +448,8 @@ with h5py.File('data/data_collector.h5', 'w') as f:
     for tf in ['M1', 'M5', 'M15', 'H1', 'H4']:
         f.create_dataset(f'{tf}/data', data=bar_data[tf])
     
-    # Tickデータ
-    f.create_dataset('ticks/data', data=tick_data)
+    # Tickデータ（構造化配列、月分割追記対応）
+    f.create_dataset('ticks/data', data=tick_data, maxshape=(None,))
     
     # メタデータ
     f.attrs['symbol'] = 'USDJPY'
@@ -421,9 +497,10 @@ with h5py.File('data/data_collector.h5', 'w') as f:
     "H4": {"bars": 10416, "missing_count": 5, "missing_rate": 0.0005}
   },
   "ticks": {
-    "count": 15000000,
-    "storage_mb": 9000,
-    "period": {"start": "2018-01-01T00:00:00Z", "end": "2025-10-23T23:59:59Z"}
+    "count": 13840269,
+    "months": 6,
+    "storage_mb": 491,
+    "period": {"start": "2025-04-01T00:00:00Z", "end": "2025-09-30T23:59:59Z"}
   },
   "quality": {
     "duplicates_removed": 0,
@@ -473,9 +550,10 @@ with h5py.File('data/data_collector.h5', 'w') as f:
 
 ### Tickデータ統計
 
-- **Tick数**: 15,000,000
-- **ストレージ**: 9,000 MB
-- **期間**: 2018-01-01 ～ 2025-10-23
+- **Tick数**: 13,840,269
+- **ストレージ**: 491 MB
+- **期間**: 2025-04-01 ～ 2025-09-30（6ヶ月）
+- **取得方法**: 月分割取得（6ヶ月 → 6回API呼び出し）
 
 ## 📈 品質統計
 
@@ -508,15 +586,60 @@ with h5py.File('data/data_collector.h5', 'w') as f:
 
 ## ✅ 検証条件
 
-| 項目 | 条件 | 失敗時処理 |
-|------|------|------------|
-| タイムスタンプ単調性 | 厳密増加（全TF + Tick） | ERROR停止 |
-| 重複 | 0件 | ERROR停止 |
-| 欠損率 | < 0.5% (TF別) | WARNING |
-| spread妥当性 | spread_min ≤ snapshot ≤ spread_max | ERROR停止 |
-| 負spread | 0件 | ERROR停止 |
-| tick_volume連続ゼロ | < 120本 | WARNING |
-| Tick順序異常 | 0件 | ERROR停止 |
+### 品質検証項目
+
+| 項目 | 条件 | 失敗時処理 | 詳細出力 |
+|------|------|------------|---------|
+| タイムスタンプ単調性 | 厳密増加（全TF + Tick） | ERROR停止 | 最初の違反箇所（index, timestamp, diff）を出力 |
+| 重複 | 0件 | ERROR停止 | 重複値とインデックスを出力 |
+| 欠損率 | < 0.5% (TF別) | WARNING | 欠損数、欠損率を出力 |
+| spread妥当性 | spread_min ≤ snapshot ≤ spread_max | ERROR停止 | 負spread件数を出力 |
+| 負spread | 0件 | ERROR停止 | 負spread件数を出力 |
+| tick_volume連続ゼロ | < 120本 | WARNING | 最大連続ゼロ数を出力 |
+| Tick順序異常 | 0件 | ERROR停止 | 違反箇所の詳細を出力 |
+
+### 設定検証（実行前チェック）
+
+データ収集開始前に `ConfigManager.validate_data_collection_config()` で以下を検証：
+
+| 項目 | 検証内容 | エラー時の対応 |
+|------|---------|---------------|
+| タイムフレーム | `['M1', 'M5', 'M15', 'H1', 'H4']` のみ許可 | ValueError + 有効値リスト表示 |
+| 通貨ペア | 大文字、6-10文字 | ValueError + フォーマット説明 |
+| 期間（start/end） | `YYYY-MM-DD` 形式、start < end | ValueError + 正しいフォーマット例 |
+| 未来日チェック | 終了日 > 今日 | Warning（実行は継続） |
+| 品質閾値 | 0 < 閾値 < 1 | ValueError + 有効範囲表示 |
+
+### 実装の品質改善
+
+**1. マジックナンバーの定数化**:
+```python
+# DataCollectorクラス内定義
+BAR_COLUMNS = {
+    'time': 0,
+    'open': 1,
+    'high': 2,
+    'low': 3,
+    'close': 4,
+    'tick_volume': 5,
+    'spread': 6,
+    'real_volume': 7
+}
+
+# 使用例
+timestamps = bar_array[:, self.BAR_COLUMNS['time']].astype(np.int64)
+spreads = bar_array[:, self.BAR_COLUMNS['spread']]
+tick_volumes = bar_array[:, self.BAR_COLUMNS['tick_volume']]
+```
+
+**2. 型ヒントの完全化**:
+- すべてのメソッドに戻り値の型ヒント（`-> None`, `-> bool` 等）を明記
+- `Optional`, `List`, `Dict`, `Tuple` 等の型を `typing` から適切にインポート
+
+**3. エラーログの詳細化**:
+- 単調性違反時: 違反インデックス、タイムスタンプ値、差分を出力
+- 重複検出時: 重複値、出現回数、インデックスリストを出力
+- 設定エラー時: 無効値、有効値リスト、修正例を出力
 
 ---
 
@@ -641,13 +764,35 @@ data_collection:
 
 ## 📌 注意事項
 
-1. **圧縮設定**: 推論用は無効（速度優先）、学習用は有効（gzip level 4）
-2. **Git管理外**: `data/*.h5` はGitignore対象
-3. **既存ファイル自動退避**: 処理実行時、既存ファイルはJST日時プレフィックス付きで自動保存
-4. **エラー握りつぶし禁止**: 異常検出時は必ず `raise` で停止
-5. **シンボル拡張**: 複数シンボル対応は設計済み（config で切替可能）
-6. **D1バー**: 取得せず、必要時はH4から派生サマリ生成
-7. **ストレージ分離**: 学習用(3ヶ月)と推論用(24時間)で別ファイル管理（STORAGE_POLICY_SPEC.md参照）
+### コーディング規約
+1. **PEP 8準拠**: インポート順序（標準ライブラリ → サードパーティ → ローカル）
+2. **型ヒント完全化**: すべてのメソッドに戻り値型（`-> None`, `-> bool` 等）を明記
+3. **マジックナンバー禁止**: 配列インデックスは `BAR_COLUMNS` 等の定数で定義
+4. **エラーログ詳細化**: 
+   - 単調性違反: 違反インデックス、タイムスタンプ値、差分を出力
+   - 重複検出: 重複値、出現回数、インデックスリストを出力
+   - 設定エラー: 無効値、有効値リスト、修正例を提示
+
+### データ管理
+5. **圧縮設定**: 推論用は無効（速度優先）、学習用は有効（gzip level 4）
+6. **Git管理外**: `data/*.h5` はGitignore対象
+7. **既存ファイル自動退避**: 処理実行時、既存ファイル（HDF5, JSON, Markdown）はJST日時プレフィックス付きで自動保存
+8. **エラー握りつぶし禁止**: 異常検出時は必ず `raise` で停止
+
+### 設計方針
+9. **シンボル拡張**: 複数シンボル対応は設計済み（config で切替可能）
+10. **D1バー**: 取得せず、必要時はH4から派生サマリ生成
+11. **ストレージ分離**: 学習用(3ヶ月)と推論用(24時間)で別ファイル管理（STORAGE_POLICY_SPEC.md参照）
+12. **設定検証**: 実行前に `validate_data_collection_config()` で全設定を検証
+    - タイムフレーム、通貨ペア、期間、閾値の妥当性チェック
+    - エラー時は詳細メッセージと修正例を表示
+
+### 統計データ整合性
+13. **HDF5メタデータとレポートの一致保証**:
+    - ⚠️ **旧プロジェクトの教訓**: 統計辞書の上書きによる齟齬が発生
+    - ✅ **現実装**: `dict.update()` で統計をマージし、複数ソースからのデータを統合
+    - 実装箇所: `_validate_bars()` と `_collect_bars()` で同一キーに対して `update()` 使用
+    - 検証方法: `tools/data_collector/inspect_hdf5.py` でメタデータ確認後、JSONレポートと件数比較
 
 ---
 
@@ -661,3 +806,60 @@ data_collection:
 - 派生日次サマリ自動生成
 - volume-bar / imbalance-bar保存
 - order flow proxy解析
+
+---
+
+## 🔧 検査ツール
+
+### inspect_hdf5.py
+
+**パス**: `tools/data_collector/inspect_hdf5.py`
+
+**目的**: データ収集結果のHDF5ファイルを検査し、データ品質を確認。
+
+**使用方法**:
+```bash
+# デフォルト実行（構造とメタデータのみ）
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py
+
+# 特定ファイル指定
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py data/20251024_120809_data_collector.h5
+
+# M1タイムフレーム詳細表示（サンプル5件）
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py --timeframe M1
+
+# 全タイムフレーム表示（サンプル3件）
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py --all -n 3
+
+# Tickデータ表示
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py --ticks
+
+# ヘルプ表示
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py --help
+```
+
+**主な機能**:
+- HDF5構造表示（グループ、データセット、shape、dtype）
+- メタデータ表示（JSON形式パース）
+- タイムフレーム別統計（件数、期間、単調性、重複チェック）
+- Tickデータ統計とサンプル表示
+- タイムスタンプ精度問題の検出（float32精度損失警告）
+
+**検出される問題**:
+- ⚠️ タイムスタンプ単調性違反（float32精度問題）
+- ⚠️ 重複レコード
+- ✅ 正常データには緑チェックマーク表示
+
+**トラブルシューティング**:
+
+タイムスタンプ精度問題の症状と解決:
+```
+症状: M1で大量の単調性違反（例: 196,949件）
+原因: データがfloat32形式で保存（UNIX時間10桁、float32は7桁精度）
+解決: 
+  1. src/data_collector/collector.py の _convert_bars_to_array() を確認
+  2. タイムスタンプ列をint64で分離保存していることを確認
+  3. データを再収集
+```
+
+````

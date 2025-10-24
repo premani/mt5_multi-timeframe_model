@@ -20,6 +20,7 @@ psutil==5.9.5              # システム監視
 # 設定・構成管理（必須）
 PyYAML==6.0.1              # YAML設定ファイル
 python-dotenv==1.0.0       # 環境変数管理
+python-dateutil==2.8.2     # 日付計算（月範囲生成）
 
 # API・ネットワーク通信（MT5 API Server用）
 requests==2.31.0           # HTTP通信

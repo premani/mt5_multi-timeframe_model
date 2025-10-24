@@ -1,0 +1,120 @@
+# MT5データ収集設定テンプレート
+# 使用方法: このファイルをコピーして data_collector.yaml を作成
+
+data_collection:
+  # 対象通貨ペア（複数指定可能）
+  symbols:
+    - USDJPY
+  
+  # 取得タイムフレーム
+  timeframes:
+    - M1
+    - M5
+    - M15
+    - H1
+    - H4
+  
+  # 取得期間
+  period:
+    start: "2018-01-01"  # 開始日（YYYY-MM-DD）
+    end: "2025-10-23"    # 終了日（YYYY-MM-DD）
+  
+  # タイムゾーン設定
+  timezone:
+    broker: "Europe/London"  # ブローカーのタイムゾーン
+    storage: "UTC"           # HDF5内部保存形式（固定）
+    display: "Asia/Tokyo"    # ログ・レポート表示（JST）
+  
+  # 品質閾値
+  quality_thresholds:
+    max_gap_ratio: 0.005      # 欠損率上限 0.5%
+    max_gap_fill: 3           # 短期欠損判定（3本未満は補完）
+    max_zero_streak: 120      # tick_volume連続ゼロ上限
+  
+  # スプレッド処理
+  spread:
+    store_min: true
+    store_max: true
+    jump:
+      enabled: true
+      lookback: 120
+      threshold_multiplier: 1.5
+  
+  # 中値価格サンプル
+  mid_price_samples:
+    - open
+    - close
+  
+  # ATRキャッシュ（欠損検出用補助、特徴量は第2段階で再計算）
+  atr_cache:
+    enabled: true
+    windows:
+      - 14
+    purpose: "欠損データ検出用の補助キャッシュ。特徴量としては第2段階で再計算される。"
+  
+  # セッションフラグ
+  session_flag:
+    mode: market_session  # market_session | utc_hour
+  
+  # Tickデータ
+  ticks:
+    enabled: true
+    retention:
+      mode: months         # years | months | days
+      value: 3             # 学習用は3ヶ月、推論用は24時間（別ストレージ）
+      rolling_update: true
+    microstructure_raw:
+      store_inter_arrival: true
+      store_direction_flag: true
+      store_signed_volume: true
+      store_spread_recalc: true
+    quality_thresholds:
+      max_inter_arrival_ms: 3000
+      max_direction_flat_ratio: 0.15
+  
+  # 圧縮設定（推論用は無効、学習用は有効）
+  compression_enabled: false
+  
+  # 検証設定
+  validation:
+    check_monotonic: true
+    check_duplicates: true
+    check_spread_valid: true
+
+# MT5 API Server設定（環境変数で上書き可能）
+api:
+  # endpoint: "http://192.168.50.172:8000"  # MT5_API_ENDPOINTで上書き
+  # api_key: ""                               # MT5_API_KEYで上書き（必須）
+  timeout: 60                                 # MT5_API_TIMEOUTで上書き可能
+  
+  # エンドポイントパス
+  endpoints:
+    historical: "/historical"
+    ticks: "/ticks"
+
+# 出力設定
+output:
+  data_dir: "data"
+  base_name: "data_collector"
+  
+  # 既存ファイル処理
+  backup:
+    enabled: true                    # 既存ファイルを自動退避
+    timestamp_format: "%Y%m%d_%H%M%S"  # JST日時プレフィックス形式
+  
+  # HDF5設定
+  hdf5:
+    compression: null  # 推論用は無効（学習用はgzip level 4）
+    shuffle: false
+  
+  # レポート出力
+  reports:
+    json: true   # data_collector_report.json
+    markdown: true  # data_collector_report.md
+
+# ログ設定
+logging:
+  level: INFO
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  timezone: "Asia/Tokyo"  # ログ表示タイムゾーン
