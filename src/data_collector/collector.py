@@ -324,15 +324,50 @@ class DataCollector:
         output_dir = Path(self.config.get('output.data_dir', 'data'))
         base_name = self.config.get('output.base_name', 'data_collector')
         
+        # バックアップ設定
+        backup_enabled = self.config.get('output.backup.enabled', True)
+        timestamp_format = self.config.get('output.backup.timestamp_format', '%Y%m%d_%H%M%S')
+        
         # JSON レポート
         if self.config.get('output.reports.json', True):
             json_path = output_dir / f"{base_name}_report.json"
+            if backup_enabled:
+                self._backup_report_file(json_path, timestamp_format)
             self._generate_json_report(json_path)
         
         # Markdown レポート
         if self.config.get('output.reports.markdown', True):
             md_path = output_dir / f"{base_name}_report.md"
+            if backup_enabled:
+                self._backup_report_file(md_path, timestamp_format)
             self._generate_markdown_report(md_path)
+    
+    def _backup_report_file(self, file_path: Path, timestamp_format: str):
+        """
+        既存レポートファイルをバックアップ
+        
+        Args:
+            file_path: レポートファイルパス
+            timestamp_format: タイムスタンプフォーマット
+        """
+        if not file_path.exists():
+            return
+        
+        # JST日時プレフィックスを生成
+        jst_tz = timezone(timedelta(hours=9))
+        mtime = datetime.fromtimestamp(
+            file_path.stat().st_mtime,
+            tz=jst_tz
+        )
+        timestamp_str = mtime.strftime(timestamp_format)
+        
+        # バックアップファイル名生成
+        backup_name = f"{timestamp_str}_{file_path.name}"
+        backup_path = file_path.parent / backup_name
+        
+        # リネーム
+        file_path.rename(backup_path)
+        self.logger.info(f"📦 既存レポートをバックアップ: {backup_name}")
     
     def _generate_json_report(self, output_path: Path):
         """JSONレポート生成"""
