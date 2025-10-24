@@ -16,9 +16,16 @@
 - **MT5 API Server経由**: HTTP/REST APIで安定した接続
 - **旧プロジェクト踏襲**: 実績のある `mt5_lstm-model` の実装パターンを継承
 - **容量想定**: 
-  - 6ヶ月: 約491 MB（実測、圧縮なし）
-  - 7年: 約6.9 GB（推定、圧縮なし）
-  - 月分割取得: メモリ効率的（1ヶ月=約80MB）
+  - **1ヶ月**: 約65 MB（実測）
+    - バーデータ: 約2MB（5TF × 8列 × mixed dtype × 約31,642行/TF、整合後）
+    - Tickデータ: 約63MB（約1,619,474件）
+  - **6ヶ月**: 約491MB（実測、圧縮なし）
+    - バーデータ: 約12MB 
+    - Tickデータ: 約479MB（13,840,269件実測）
+  - **7年**: 約6.9GB（推定、圧縮なし）
+    - バーデータ: 約168MB 
+    - Tickデータ: 約6.7GB（推定）
+  - **月分割取得**: メモリ効率的（1ヶ月=約65MB）
 
 ---
 
@@ -308,9 +315,32 @@ return np.array([[bar['time'], bar['open'], ...] for bar in bars], dtype=np.floa
   - **背景**: HDF5を`'a'`モードで開くと既存データが保持されるため、明示的削除が必要
 
 ### 1. データ取得
-各タイムフレームの生データをMT5 APIから取得
+各タイムフレームの生データをMT5 API Serverから取得
 
-### 2. タイムゾーン変換
+**タイムフレーム**: M1, M5, M15, H1, H4（5種類）
+**エンドポイント**: `POST /historical`
+**戻り値**: numpy配列（N行 × 8列: time, OHLC, tick_volume, spread, real_volume）
+
+### 2. タイムスタンプ整合（実装完了）
+全タイムフレームをM1基準（1分間隔）に整合
+
+**実装クラス**: `TimestampAligner`（`src/data_collector/timestamp_aligner.py`）
+
+**処理内容**:
+1. M1のUNIXタイムスタンプをdatetime系列に変換（基準）
+2. 各TF（M5/M15/H1/H4）をM1時系列に`reindex`（前方補完）
+3. 整合済みnumpy配列を返す
+
+**結果**:
+- 全TFが同じ行数（M1基準）に統一
+- 補完率: M5(80%), M15(93%), H1(98%), H4(99.6%)
+
+詳細: [TIMESTAMP_ALIGNMENT_SPEC.md](./data_collector/TIMESTAMP_ALIGNMENT_SPEC.md)
+
+### 3. タイムゾーン変換
+ブローカータイム → UTC（全TF + Tick）
+
+### 3. タイムゾーン変換
 ブローカータイム → UTC（全TF + Tick）
 
 **重要**: MT5が返すタイムスタンプは**実際の市場イベント発生時刻**を表す
@@ -386,19 +416,63 @@ if tz_stats['already_utc'] / total_count > 0.01:  # 1%超
     )
 ```
 
-### 3. タイムスタンプ整合
-- **連続性検査**: 期待間隔（M1=60s, M5=300s, M15=900s, H1=3600s, H4=14400s）と実際の差分を比較
-- **欠損分類**:
-  - 短期（<3本）: forward fill（M1/M5のみ）+ `filled=True` フラグ
-  - 長期（≥3本）: セグメント除外リストへ記録（学習時マスク）
-  - 休場（週末/祝日）: `trading_halt_mask` 付与
-- **詳細**: `docs/data_collector/TIMESTAMP_ALIGNMENT_SPEC.md`
+### 3. タイムスタンプ整合（実装完了）
+
+**目的**: 全タイムフレーム（M1/M5/M15/H1/H4）のバーデータを、M1基準の1分間隔に整合し、TF間計算を可能にする。
+
+**実装方式**:
+- **基準タイムフレーム**: M1（1分間隔、最も細かい粒度）
+- **整合アルゴリズム**: pandas `reindex()` + 前方補完（forward fill）
+- **処理タイミング**: バーデータ収集後、HDF5保存前
+
+**処理フロー**:
+```python
+# 1. M1のUNIX時刻をdatetimeに変換（基準時系列）
+m1_times = pd.to_datetime(M1[:, 0].astype(np.int64), unit='s', utc=True)
+
+# 2. 各TF（M5/M15/H1/H4）をM1基準に整合
+for tf in ['M5', 'M15', 'H1', 'H4']:
+    # 2-1. TFデータをDataFrameに変換
+    tf_df = pd.DataFrame(tf_array, columns=BAR_COLUMNS)
+    tf_df.index = pd.to_datetime(tf_array[:, 0].astype(np.int64), unit='s', utc=True)
+    
+    # 2-2. M1時系列に合わせてreindex（前方補完）
+    aligned_df = tf_df.reindex(m1_times, method='ffill')
+    
+    # 2-3. numpy配列に戻す
+    aligned_array = aligned_df.values.astype(np.float64)
+
+# 結果: 全TFが同じ行数（M1基準）に統一
+```
+
+**補完動作**:
+- M5バーが5分間に1本 → M1基準では5行に前方補完（最初5行が同じ値）
+- M15バーが15分間に1本 → M1基準では15行に前方補完
+- H1バーが60分間に1本 → M1基準では60行に前方補完
+- H4バーが240分間に1本 → M1基準では240行に前方補完
+
+**実測結果**（2024-10-01 ～ 2024-10-31、1ヶ月）:
+- **M1**: 31,642行（基準）
+- **M5**: 6,337行 → 31,642行（補完率: 80.0%）
+- **M15**: 2,113行 → 31,642行（補完率: 93.3%）
+- **H1**: 529行 → 31,642行（補完率: 98.3%）
+- **H4**: 132行 → 31,642行（補完率: 99.6%）
+
+**品質保証**:
+- ✅ 全TFの単調性検査合格
+- ✅ 重複なし
+- ✅ 前方補完動作確認（M5の最初5行が同じ値を保持）
+- ✅ H4先頭のNaN: 正常動作（M1開始時刻とH4バー時刻の不一致）
+
+**実装クラス**: `TimestampAligner`（`src/data_collector/timestamp_aligner.py`）
+
+**詳細仕様**: `docs/data_collector/TIMESTAMP_ALIGNMENT_SPEC.md`
 
 ### 4. Tick処理（月分割取得）
 - **期間分割**: 収集期間を月単位に分割（例: 2025-04-01～2025-09-30 → 6ヶ月）
   - 実装: `dateutil.relativedelta` 使用、月初～月末のISO8601文字列生成
 - **月ごと取得**: 各月のTickデータをMT5 APIから取得
-  - タイムアウト: 300秒（1ヶ月約60秒、余裕を持たせた設定）
+  - タイムアウト: 300秒（1ヶ月約60秒想定、余裕を持たせた設定）
 - **HDF5追記保存**: 
   - 初回: `create_dataset()` with `maxshape=(None,)` で可変長データセット作成
   - 2回目以降: `dataset.resize()` で領域拡張後、データ追記
@@ -410,6 +484,12 @@ if tz_stats['already_utc'] / total_count > 0.01:  # 1%超
   - `signed_volume` = direction_flag × volume
   - `spread_recalc` = ask - bid（検算用）
 - **詳細**: `docs/data_collector/MICROSTRUCTURE_SPEC.md`
+
+### 5. 品質検証
+各種検証条件をチェック（後述）
+
+### 6. HDF5保存
+整合済みバーデータ + Tick + 補助系列 + メタデータを保存
 
 ### 5. 品質検証
 各種検証条件をチェック（後述）
