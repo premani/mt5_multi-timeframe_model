@@ -198,10 +198,10 @@ class DataCollector:
             self.logger.warning(f"   ⚠️  Tickデータが取得できませんでした")
             return
         
-        # タイムスタンプ検証
-        timestamps = np.array([tick['time'] for tick in ticks])
-        self.validator.check_monotonic(timestamps, name="Tick")
-        self.validator.check_duplicates(timestamps, name="Tick")
+        # タイムスタンプ検証（ミリ秒精度）
+        timestamps_msc = np.array([tick['time_msc'] for tick in ticks])
+        self.validator.check_monotonic(timestamps_msc, name="Tick")
+        self.validator.check_duplicates(timestamps_msc, name="Tick")
         
         # HDF5保存
         self.hdf5_writer.write_tick_data(ticks)
