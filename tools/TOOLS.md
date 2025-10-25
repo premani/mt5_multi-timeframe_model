@@ -57,6 +57,11 @@ bash ./docker_run.sh pytest tools/*/test_integration_*.py
 ### 検証スクリプト実行
 
 ```bash
+# 前処理結果確認（デフォルト: data/preprocessor.h5）
+bash ./docker_run.sh python3 tools/preprocessor/inspect_preprocessor.py
+bash ./docker_run.sh python3 tools/preprocessor/inspect_preprocessor.py data/preprocessor.h5
+bash ./docker_run.sh python3 tools/preprocessor/inspect_preprocessor.py data/20251023_143045_preprocessor.h5
+
 # HDF5構造確認
 bash ./docker_run.sh python3 tools/preprocessor/validate_output.py --file data/preprocessed.h5
 
@@ -99,11 +104,13 @@ tools/<処理名>/test_integration_to_<次フェーズ>.py
 ### 3. 検証スクリプト
 ```
 tools/<処理名>/validate_<検証内容>.py
+tools/<処理名>/inspect_<検査対象>.py
 ```
 例:
-- `tools/preprocessor/validate_output.py`
-- `tools/validator/validate_timestamp_order.py`
-- `tools/trainer/validate_model_weights.py`
+- `tools/preprocessor/inspect_preprocessor.py` - 前処理結果確認
+- `tools/preprocessor/validate_output.py` - 出力ファイル検証
+- `tools/validator/validate_timestamp_order.py` - タイムスタンプ順序検証
+- `tools/trainer/validate_model_weights.py` - モデル重み検証
 
 ### 4. 静的解析スクリプト
 ```
@@ -203,7 +210,10 @@ tools/
 │   ├── test_hdf5_dataset.py
 │   ├── test_logging_manager.py
 │   └── validate_*.py
+├── data_collector/
+│   └── inspect_hdf5.py
 ├── preprocessor/
+│   ├── inspect_preprocessor.py        # 前処理結果確認ツール
 │   ├── test_alignment.py
 │   ├── test_integration_to_trainer.py
 │   ├── validate_output.py
