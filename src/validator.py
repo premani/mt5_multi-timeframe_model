@@ -94,7 +94,14 @@ class Validator:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.logger = LoggingManager.get_logger(__name__)
+        
+        # ロガー初期化
+        self.logger = LoggingManager(
+            name="validator",
+            log_dir="logs",
+            level=config.get("logging", {}).get("level", "INFO")
+        )
+        
         self.device = torch.device(config['batch']['device'] if torch.cuda.is_available() else 'cpu')
         
         self.logger.info(f"🎯 検証処理開始")

@@ -244,8 +244,8 @@ config/data_collector.yaml
 config/feature_calculator.yaml
 config/preprocessor.yaml
 config/trainer.yaml
-config/train_validate.yaml
-config/transformation_onnx.yaml
+config/validator.yaml
+
 # テンプレートは管理対象として残す
 # config/*.template.yaml
 
