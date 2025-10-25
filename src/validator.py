@@ -298,6 +298,24 @@ class Validator:
             "",
             "---",
             "",
+            "## 📊 クラス分布",
+            "",
+            "| クラス | サンプル数 | 割合 |",
+            "|--------|-----------|------|"
+        ]
+        
+        # クラス分布
+        class_names = ['DOWN', 'NEUTRAL', 'UP']
+        for name in class_names:
+            key = name.lower()
+            count = report['class_distribution'][key]['count']
+            ratio = report['class_distribution'][key]['ratio']
+            lines.append(f"| {name:8s} | {count:6,d} | {ratio:6.2%} |")
+        
+        lines.extend([
+            "",
+            "---",
+            "",
             "## 🎯 方向予測評価",
             "",
             f"**Accuracy**: {report['direction_metrics']['accuracy']:.4f}",
@@ -306,9 +324,8 @@ class Validator:
             "",
             "| クラス | Precision | Recall | F1-Score |",
             "|--------|-----------|--------|----------|"
-        ]
+        ])
         
-        class_names = ['DOWN', 'NEUTRAL', 'UP']
         for i, name in enumerate(class_names):
             precision = report['direction_metrics']['precision'][i]
             recall = report['direction_metrics']['recall'][i]
@@ -331,22 +348,149 @@ class Validator:
             "",
             "---",
             "",
+            "## 🔍 予測信頼度",
+            "",
+            f"- **平均信頼度**: {report['confidence_stats']['mean']:.4f}",
+            f"- **中央値**: {report['confidence_stats']['median']:.4f}",
+            f"- **標準偏差**: {report['confidence_stats']['std']:.4f}",
+            f"- **範囲**: [{report['confidence_stats']['min']:.4f}, {report['confidence_stats']['max']:.4f}]",
+            f"- **四分位範囲**: [{report['confidence_stats']['q25']:.4f}, {report['confidence_stats']['q75']:.4f}]",
+            "",
+            "---",
+            "",
             "## 📊 価格幅予測評価",
+            "",
+            f"### 誤差指標",
             "",
             f"- **MAE**: {report['magnitude_metrics']['mae']:.4f} pips",
             f"- **RMSE**: {report['magnitude_metrics']['rmse']:.4f} pips",
             f"- **R²**: {report['magnitude_metrics']['r2']:.4f}",
+            "",
+            "### 実際値の分布",
+            "",
+            f"- **平均**: {report['magnitude_distribution']['true']['mean']:.4f} pips",
+            f"- **中央値**: {report['magnitude_distribution']['true']['median']:.4f} pips",
+            f"- **標準偏差**: {report['magnitude_distribution']['true']['std']:.4f} pips",
+            f"- **範囲**: [{report['magnitude_distribution']['true']['min']:.4f}, {report['magnitude_distribution']['true']['max']:.4f}] pips",
+            "",
+            "### 予測値の分布",
+            "",
+            f"- **平均**: {report['magnitude_distribution']['pred']['mean']:.4f} pips",
+            f"- **中央値**: {report['magnitude_distribution']['pred']['median']:.4f} pips",
+            f"- **標準偏差**: {report['magnitude_distribution']['pred']['std']:.4f} pips",
+            f"- **範囲**: [{report['magnitude_distribution']['pred']['min']:.4f}, {report['magnitude_distribution']['pred']['max']:.4f}] pips",
             ""
         ])
         
         with open(md_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
     
+    def analyze_class_distribution(self, y_true: np.ndarray) -> Dict[str, Any]:
+        """クラス分布分析"""
+        self.logger.info(f"📊 クラス分布分析")
+        
+        class_names = ['DOWN', 'NEUTRAL', 'UP']
+        total = len(y_true)
+        distribution = {}
+        
+        for i, name in enumerate(class_names):
+            count = np.sum(y_true == i)
+            ratio = count / total
+            distribution[name.lower()] = {
+                'count': int(count),
+                'ratio': float(ratio)
+            }
+            self.logger.info(f"   {name:8s}: {count:5d} ({ratio:6.2%})")
+        
+        return distribution
+    
+    def analyze_prediction_confidence(
+        self,
+        model: MultiTFModel,
+        sequences: Dict[str, torch.Tensor],
+        batch_size: int
+    ) -> Dict[str, Any]:
+        """予測信頼度分析"""
+        self.logger.info(f"🔍 予測信頼度分析")
+        
+        n_samples = len(next(iter(sequences.values())))
+        all_probs = []
+        
+        with torch.no_grad():
+            for i in range(0, n_samples, batch_size):
+                batch = {
+                    tf: seq[i:i+batch_size].to(self.device)
+                    for tf, seq in sequences.items()
+                }
+                
+                output = model(batch)
+                direction_logits = output["direction"]
+                probs = torch.softmax(direction_logits, dim=1)
+                all_probs.append(probs.cpu().numpy())
+        
+        all_probs = np.concatenate(all_probs)
+        max_probs = np.max(all_probs, axis=1)
+        
+        confidence_stats = {
+            'mean': float(np.mean(max_probs)),
+            'median': float(np.median(max_probs)),
+            'std': float(np.std(max_probs)),
+            'min': float(np.min(max_probs)),
+            'max': float(np.max(max_probs)),
+            'q25': float(np.percentile(max_probs, 25)),
+            'q75': float(np.percentile(max_probs, 75))
+        }
+        
+        self.logger.info(f"   平均信頼度: {confidence_stats['mean']:.4f}")
+        self.logger.info(f"   中央値: {confidence_stats['median']:.4f}")
+        self.logger.info(f"   標準偏差: {confidence_stats['std']:.4f}")
+        
+        return confidence_stats
+    
+    def analyze_magnitude_distribution(
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray
+    ) -> Dict[str, Any]:
+        """価格幅分布分析"""
+        self.logger.info(f"📊 価格幅分布分析")
+        
+        true_stats = {
+            'mean': float(np.mean(y_true)),
+            'median': float(np.median(y_true)),
+            'std': float(np.std(y_true)),
+            'min': float(np.min(y_true)),
+            'max': float(np.max(y_true)),
+            'q25': float(np.percentile(y_true, 25)),
+            'q75': float(np.percentile(y_true, 75))
+        }
+        
+        pred_stats = {
+            'mean': float(np.mean(y_pred)),
+            'median': float(np.median(y_pred)),
+            'std': float(np.std(y_pred)),
+            'min': float(np.min(y_pred)),
+            'max': float(np.max(y_pred)),
+            'q25': float(np.percentile(y_pred, 25)),
+            'q75': float(np.percentile(y_pred, 75))
+        }
+        
+        self.logger.info(f"   実際値 - 平均: {true_stats['mean']:.4f} pips, 範囲: [{true_stats['min']:.4f}, {true_stats['max']:.4f}]")
+        self.logger.info(f"   予測値 - 平均: {pred_stats['mean']:.4f} pips, 範囲: [{pred_stats['min']:.4f}, {pred_stats['max']:.4f}]")
+        
+        return {
+            'true': true_stats,
+            'pred': pred_stats
+        }
+    
     def run(self):
         """検証実行"""
         try:
             # データ読み込み
             test_sequences, test_direction, test_magnitude = self.load_data()
+            
+            # サンプル数取得（マルチTF対応）
+            n_samples = len(test_direction)
             
             # モデル読み込み
             model = self.load_model()
@@ -366,14 +510,25 @@ class Validator:
                 magnitude_preds
             )
             
+            # 追加分析
+            class_distribution = self.analyze_class_distribution(test_direction.numpy())
+            confidence_stats = self.analyze_prediction_confidence(model, test_sequences, batch_size)
+            magnitude_distribution = self.analyze_magnitude_distribution(
+                test_magnitude.numpy(),
+                magnitude_preds
+            )
+            
             # レポート作成
             report = {
                 'timestamp': datetime.now().isoformat(),
                 'model_file': self.config['input']['model_file'],
                 'preprocessed_file': self.config['input']['preprocessed_file'],
-                'test_samples': len(test_sequences),
+                'test_samples': n_samples,
+                'class_distribution': class_distribution,
                 'direction_metrics': direction_metrics,
-                'magnitude_metrics': magnitude_metrics
+                'magnitude_metrics': magnitude_metrics,
+                'confidence_stats': confidence_stats,
+                'magnitude_distribution': magnitude_distribution
             }
             
             # 保存

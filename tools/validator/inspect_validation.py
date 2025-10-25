@@ -33,6 +33,15 @@ def main():
     print(f"   データ: {Path(report['preprocessed_file']).name}")
     print(f"   テストサンプル数: {report['test_samples']:,}")
     
+    # クラス分布
+    print(f"\n📊 クラス分布")
+    class_names = ['DOWN', 'NEUTRAL', 'UP']
+    for name in class_names:
+        key = name.lower()
+        count = report['class_distribution'][key]['count']
+        ratio = report['class_distribution'][key]['ratio']
+        print(f"   {name:8s}: {count:6,d} ({ratio:6.2%})")
+    
     # 方向予測評価
     print(f"\n🎯 方向予測評価")
     direction = report['direction_metrics']
@@ -59,6 +68,20 @@ def main():
     print(f"   MAE: {magnitude['mae']:.4f} pips")
     print(f"   RMSE: {magnitude['rmse']:.4f} pips")
     print(f"   R²: {magnitude['r2']:.4f}")
+    
+    # 予測信頼度
+    print(f"\n🔍 予測信頼度")
+    confidence = report['confidence_stats']
+    print(f"   平均: {confidence['mean']:.4f}")
+    print(f"   中央値: {confidence['median']:.4f}")
+    print(f"   標準偏差: {confidence['std']:.4f}")
+    print(f"   範囲: [{confidence['min']:.4f}, {confidence['max']:.4f}]")
+    
+    # 価格幅分布
+    print(f"\n📊 価格幅分布")
+    mag_dist = report['magnitude_distribution']
+    print(f"   実際値 - 平均: {mag_dist['true']['mean']:.4f} pips, 範囲: [{mag_dist['true']['min']:.4f}, {mag_dist['true']['max']:.4f}]")
+    print(f"   予測値 - 平均: {mag_dist['pred']['mean']:.4f} pips, 範囲: [{mag_dist['pred']['min']:.4f}, {mag_dist['pred']['max']:.4f}]")
     
     print("\n" + "=" * 80)
 
