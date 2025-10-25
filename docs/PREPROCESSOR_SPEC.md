@@ -93,20 +93,28 @@ def filter_features(features: pd.DataFrame) -> pd.DataFrame:
     品質基準に満たない特徴量を除外
     
     除外条件:
-    - NaN/Inf 含有率 > 1%
+    - NaN/Inf 含有率 > 1%（列単位）
+    - NaN/Inf 含有行（行単位で完全除外） ← 追加
     - IQR < 1e-6（定数列）
     - 他特徴との相関 |ρ| > 0.95
     """
-    # NaN/Inf除外
+    # 1. NaN/Inf含有列除外（列単位）
     nan_ratio = features.isna().sum() / len(features)
-    features = features.loc[:, nan_ratio < 0.01]
+    inf_ratio = np.isinf(features.select_dtypes(include=[np.number])).sum() / len(features)
+    valid_cols = (nan_ratio + inf_ratio) <= 0.01
+    features = features.loc[:, valid_cols]
     
-    # 定数列除外
+    # 2. NaN/Inf含有行除外（行単位で完全除外） ← 追加
+    features = features.replace([np.inf, -np.inf], np.nan)
+    features = features.dropna()
+    logger.info(f"   NaN/Inf含有行除外: {len(features)} 行残存")
+    
+    # 3. 定数列除外
     from scipy.stats import iqr
     feature_iqr = features.apply(iqr)
     features = features.loc[:, feature_iqr >= 1e-6]
     
-    # 高相関ペア除外（上三角走査）
+    # 4. 高相関ペア除外（上三角走査）
     corr_matrix = features.corr().abs()
     upper_tri = corr_matrix.where(
         np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
@@ -133,6 +141,10 @@ def normalize_features(features: pd.DataFrame) -> Tuple[np.ndarray, dict]:
     """
     scaler = RobustScaler()
     normalized = scaler.fit_transform(features)
+    
+    # 正規化後の検証（NaN/Inf検出） ← 追加
+    if np.isnan(normalized).any() or np.isinf(normalized).any():
+        raise ValueError("正規化後にNaN/Infが発生しました")
     
     params = {
         'center_': scaler.center_.tolist(),
@@ -1113,6 +1125,7 @@ def verify_inference_consistency():
 - 特徴量名リスト表示
 - メタデータ表示（生成日時・フィルタリング統計）
 - HDF5構造のツリー表示
+- **NaN/Inf検証**（全TFデータの品質検証） ← 追加
 
 **使用方法**:
 
@@ -1170,6 +1183,19 @@ Scale（先頭5個）: [2.101, 2.000, 4.200, ...]
    1. M1_price_change_pips
    2. M1_range_pips
    ...
+
+================================================================================
+✅ NaN/Inf検証
+================================================================================
+
+🔍 データ品質検証:
+   - M1: NaN 0個 (0.00%), Inf 0個 (0.00%)
+   - M5: NaN 0個 (0.00%), Inf 0個 (0.00%)
+   - M15: NaN 0個 (0.00%), Inf 0個 (0.00%)
+   - H1: NaN 0個 (0.00%), Inf 0個 (0.00%)
+   - H4: NaN 0個 (0.00%), Inf 0個 (0.00%)
+
+✅ 全タイムフレームでNaN/Infなし（品質OK）
 ```
 
 **使用シーン**:

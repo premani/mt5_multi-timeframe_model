@@ -156,6 +156,18 @@ def filter_features(
     
     features = features[valid_cols]
     
+    # 残存NaN/Infを含む行を削除
+    initial_rows = len(features)
+    features = features.replace([np.inf, -np.inf], np.nan)
+    features = features.dropna()
+    removed_rows = initial_rows - len(features)
+    
+    if removed_rows > 0:
+        logger.info(f"   🗑️  NaN/Inf含有行削除: {removed_rows}行")
+    
+    if len(features) == 0:
+        raise ValueError("全行がNaN/Infにより除外されました")
+    
     # 2. 定数列除外（IQR < 閾値）
     q75 = features.quantile(0.75)
     q25 = features.quantile(0.25)
@@ -230,6 +242,16 @@ def normalize_features(
     # 正規化実行
     normalized = scaler.fit_transform(features)
     
+    # NaN/Inf チェック（正規化後）
+    nan_count = np.isnan(normalized).sum()
+    inf_count = np.isinf(normalized).sum()
+    
+    if nan_count > 0 or inf_count > 0:
+        logger.error(f"   ❌ 正規化後にNaN/Inf検出: NaN={nan_count}, Inf={inf_count}")
+        raise ValueError("正規化後にNaN/Infが発生しました。入力データを確認してください。")
+    
+    logger.info(f"   ✅ 正規化データ検証: NaN/Inf なし")
+    
     # パラメータ保存（推論時の逆変換に必須）
     if norm_config['save_params']:
         if method == 'robust':
@@ -296,6 +318,15 @@ def create_sequences(
             seq_list.append(features[i:i+window_size])
         
         sequences[tf_name] = np.array(seq_list, dtype=np.float32)
+        
+        # NaN/Inf チェック
+        nan_count = np.isnan(sequences[tf_name]).sum()
+        inf_count = np.isinf(sequences[tf_name]).sum()
+        
+        if nan_count > 0 or inf_count > 0:
+            logger.error(f"   ❌ {tf_name}にNaN/Inf検出: NaN={nan_count}, Inf={inf_count}")
+            raise ValueError(f"{tf_name}のシーケンス化後にNaN/Infが発生しました")
+        
         logger.info(f"   ✅ {tf_name}: {sequences[tf_name].shape} "
                    f"({window_size}ステップ × {F}特徴量 × {len(seq_list):,}シーケンス)")
     
