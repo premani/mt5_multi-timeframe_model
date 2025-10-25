@@ -1,19 +1,102 @@
 # VALIDATOR_SPEC.md
 
-**バージョン**: 1.0
-**更新日**: 2025-10-21
+**バージョン**: 1.1 (Phase 0実装)
+**更新日**: 2025-10-25
 **責任者**: core-team
 **処理段階**: 第5段階: 検証・評価
 
 ---
 
+## 📋 変更履歴
+
+| バージョン | 日付 | 変更内容 |
+|-----------|------|---------|
+| 1.0 | 2025-10-21 | 初版作成（デュアルモード対応仕様） |
+| 1.1 | 2025-10-25 | Phase 0実装（シンプルLSTM検証） |
+
+---
+
+## 🎯 Phase 0実装範囲
+
+### ✅ 実装済み（v1.1）
+- 基本的な方向予測評価（Accuracy, Precision, Recall, F1）
+- 価格幅予測評価（MAE, RMSE, R²）
+- JSONレポート出力
+- 確認ツール（inspect_validation.py）
+
+### 📋 未実装（Phase 1以降）
+- デュアルモード対応（Scalp/Swing別評価）
+- バックテスト機能
+- コスト考慮期待値計算
+- 性能劣化検出
+- モデル比較機能
+
+---
+
 ## 📋 目的
 
-`src/validator.py` による検証・評価・簡易バックテスト・性能劣化検出を定義する。
+`src/validator.py` による学習済みモデルの性能評価。
+
+---
+
+## 📊 Phase 0 評価指標
+
+### 1. 方向予測（3クラス分類）
+
+#### Accuracy（正解率）
+```
+Accuracy = (正解数) / (全サンプル数)
+```
+
+#### Precision（適合率）
+```
+Precision = TP / (TP + FP)
+```
+
+#### Recall（再現率）
+```
+Recall = TP / (TP + FN)
+```
+
+#### F1-Score（調和平均）
+```
+F1 = 2 * (Precision * Recall) / (Precision + Recall)
+```
+
+#### 混同行列
+```
+              予測
+          DOWN  NEUTRAL  UP
+実DOWN     xxxx     xxxx  xxxx
+  NEUTRAL  xxxx     xxxx  xxxx
+  UP       xxxx     xxxx  xxxx
+```
+
+### 2. 価格幅予測（回帰）
+
+#### MAE（平均絶対誤差）
+```
+MAE = (1/N) * Σ|y_true - y_pred|
+```
+- 単位: pips
+
+#### RMSE（二乗平均平方根誤差）
+```
+RMSE = sqrt((1/N) * Σ(y_true - y_pred)²)
+```
+- 単位: pips
+
+#### R² Score（決定係数）
+```
+R² = 1 - (SS_res / SS_tot)
+```
+- 範囲: -∞ ~ 1.0
 
 ---
 
 ## 📊 評価指標（デュアルモード対応）
+
+**注意**: 以下はPhase 1以降の拡張仕様（未実装）
 
 ### 1. 分類精度（共通）
 - **Direction Accuracy**: 方向予測精度（UP/DOWN/NEUTRAL別）

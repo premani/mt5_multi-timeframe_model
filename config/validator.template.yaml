@@ -1,0 +1,55 @@
+# 検証設定（第5段階）
+
+# 入力ファイル
+input:
+  # 前処理済みデータ（テストデータ含む）
+  preprocessed_file: "models/fx_lstm_model_20241025_203106_preprocessed.h5"
+  
+  # 学習済みモデル
+  model_file: "models/fx_lstm_model_20241025_203857_training.pt"
+
+# 出力設定
+output:
+  # 検証レポート出力ディレクトリ
+  report_dir: "data"
+  
+  # 混同行列可視化（オプション）
+  save_confusion_matrix: true
+
+# 評価指標
+metrics:
+  # 方向予測評価
+  direction:
+    enabled: true
+    metrics:
+      - accuracy
+      - precision
+      - recall
+      - f1_score
+    
+    # クラス別詳細
+    per_class: true
+  
+  # 価格幅予測評価
+  magnitude:
+    enabled: true
+    metrics:
+      - mae      # Mean Absolute Error
+      - rmse     # Root Mean Squared Error
+      - r2       # R² Score
+    
+    # pips単位での評価
+    unit: "pips"
+
+# バッチ処理
+batch:
+  # バッチサイズ
+  size: 256
+  
+  # デバイス（cuda/cpu）
+  device: "cuda"
+
+# ログ設定
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
