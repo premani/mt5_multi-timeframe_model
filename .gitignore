@@ -267,3 +267,4 @@ CLAUDE.md
 !AGENTS.md
 !CLAUDE.md
 !.gitignore
+config/feature_calculator.yaml

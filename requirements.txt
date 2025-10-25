@@ -28,6 +28,7 @@ urllib3==2.0.4             # URL処理
 
 # データ処理・変換・高速化（必須）
 h5py==3.10.0               # HDF5ファイル操作
+tables>=3.9.0              # PyTables (pandas HDF5保存に必要)
 numexpr>=2.8.0             # 数値式高速化
 numba>=0.58.0              # JIT並列処理（Support/Resistance強度計算最適化）
 pytz==2023.3               # タイムゾーン処理
