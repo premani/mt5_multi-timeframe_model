@@ -27,6 +27,9 @@ from sklearn.preprocessing import RobustScaler, StandardScaler, MinMaxScaler
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+# ラベル生成モジュール（削除）
+# from preprocessor.label_generator import LabelGenerator
+
 
 def setup_logging(config: Dict[str, Any]) -> logging.Logger:
     """ログ設定（JST表示）"""
@@ -364,13 +367,16 @@ def save_preprocessed_data(
     metadata: Dict[str, Any],
     output_path: Path,
     config: Dict[str, Any],
-    logger: logging.Logger
+    logger: logging.Logger,
+    labels: Dict[str, np.ndarray] = None
 ) -> None:
     """
     前処理済みデータをHDF5で保存
     
     Structure:
         /sequences/{TF}/data: (N, window, F) シーケンス
+        /labels/direction: (N,) int [0=DOWN, 1=NEUTRAL, 2=UP]
+        /labels/magnitude: (N,) float [pips]
         /scaler_params: JSON bytes
         /feature_names: 特徴量名リスト
         /metadata: JSON bytes
@@ -389,6 +395,13 @@ def save_preprocessed_data(
         seq_group = f.create_group('sequences')
         for tf_name, seq_data in sequences.items():
             seq_group.create_dataset(tf_name, data=seq_data, dtype='float32')
+        
+        # ラベル保存（有効な場合）
+        if labels is not None:
+            labels_group = f.create_group('labels')
+            labels_group.create_dataset('direction', data=labels['direction'], dtype='int64')
+            labels_group.create_dataset('magnitude', data=labels['magnitude'], dtype='float32')
+            logger.info(f"   📊 ラベル保存: direction {labels['direction'].shape}, magnitude {labels['magnitude'].shape}")
         
         # 正規化パラメータ保存
         if scaler_params:
@@ -507,14 +520,43 @@ def main():
         # 4. シーケンス化
         sequences = create_sequences(normalized, config['sequences'], logger)
         
-        # 5. 未来リーク検査
+        # 5. ラベル読み込み（feature_calculatorで生成済み）
+        labels = None
+        if config.get('label_generation', {}).get('enabled', False):
+            logger.info("🏷️  ラベル読み込み")
+            
+            # 特徴量ファイルからラベル読み込み
+            with h5py.File(input_path, 'r') as f:
+                if 'labels' in f:
+                    labels = {
+                        'direction': f['labels/direction'][:],
+                        'magnitude': f['labels/magnitude'][:]
+                    }
+                    
+                    logger.info(f"   Direction: {labels['direction'].shape}")
+                    logger.info(f"   Magnitude: {labels['magnitude'].shape}")
+                    
+                    # 統計表示
+                    direction_counts = np.bincount(labels['direction'])
+                    total = len(labels['direction'])
+                    logger.info(f"   Direction分布: UP {direction_counts[2]/total*100:.1f}%, "
+                              f"NEUTRAL {direction_counts[1]/total*100:.1f}%, "
+                              f"DOWN {direction_counts[0]/total*100:.1f}%")
+                    logger.info(f"   Magnitude: 平均 {labels['magnitude'].mean():.2f} pips, "
+                              f"中央値 {np.median(labels['magnitude']):.2f} pips")
+                else:
+                    logger.warning("⚠️  ラベルが見つかりません（feature_calculatorで生成されていない可能性）")
+                    logger.warning("   ラベルなしで処理を継続します")
+        
+        # 6. 未来リーク検査
         check_future_leak(sequences, config, logger)
         
-        # 6. 保存
+        # 7. 保存
         metadata = {
             'processing_timestamp': datetime.now(timezone(timedelta(hours=9))).isoformat(),
             'input_file': str(input_path),
             'filter_stats': filter_stats,
+            'label_generation_enabled': labels is not None,
             'config': config
         }
         
@@ -526,10 +568,11 @@ def main():
             metadata,
             output_path,
             config,
-            logger
+            logger,
+            labels=labels  # ラベルを追加
         )
         
-        # 7. レポート生成
+        # 8. レポート生成
         processing_time = time.time() - start_time
         generate_report(
             sequences,

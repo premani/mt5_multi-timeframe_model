@@ -80,6 +80,38 @@ bash ./docker_run.sh python3 _test_hdf5_check.py
 - 専用ツール・スクリプトで履歴管理と保守性を確保
 - 一時スクリプト(`_test_*.py`)は検証後に削除
 
+### 5. データ確認は専用ツールを使用
+
+各処理段階のデータ確認には、必ず専用の確認ツールを使用してください。
+
+**専用ツール一覧**:
+```bash
+# データ収集結果の確認
+bash ./docker_run.sh python3 tools/data_collector/inspect_hdf5.py
+
+# 特徴量計算結果の確認
+bash ./docker_run.sh python3 tools/feature_calculator/inspect_features.py
+
+# 前処理結果の確認
+bash ./docker_run.sh python3 tools/preprocessor/inspect_preprocessor.py
+```
+
+❌ **NG**: 直接コードでファイル内容確認
+```bash
+bash ./docker_run.sh python3 -c "import h5py; with h5py.File('data/preprocessor.h5', 'r') as f: print(list(f.keys()))"
+```
+
+✅ **OK**: 専用ツール使用
+```bash
+bash ./docker_run.sh python3 tools/preprocessor/inspect_preprocessor.py
+```
+
+**理由**:
+- 一貫した出力フォーマットで確認品質が安定
+- ツールにデータ検証ロジックが組み込み済み
+- 再利用可能で保守性が高い
+- 出力が見やすく、問題発見が容易
+
 ---
 
 ## コミットメッセージ規約

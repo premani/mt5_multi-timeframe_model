@@ -26,7 +26,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from feature_calculator import BaseCalculator, BasicMultiTFCalculator, SessionTimeCalculator
+from feature_calculator import BaseCalculator, BasicMultiTFCalculator, SessionTimeCalculator, LabelGenerator
 from feature_calculator.integrator import FeatureCalculatorIntegrator
 
 
@@ -199,9 +199,10 @@ def save_features(
     category_info: Dict[str, Any],
     config: Dict[str, Any],
     logger: logging.Logger,
-    integrator: 'FeatureCalculatorIntegrator'
+    integrator: 'FeatureCalculatorIntegrator',
+    labels: Dict[str, np.ndarray] = None
 ) -> Path:
-    """特徴量をHDF5形式で保存"""
+    """特徴量をHDF5形式で保存（ラベルオプション）"""
     logger.info("🔄 特徴量保存開始")
     
     # 出力ファイルパス（既存時のみリネーム）
@@ -262,6 +263,15 @@ def save_features(
         }
         metadata_json = json.dumps(metadata, ensure_ascii=False).encode('utf-8')
         f.create_dataset('metadata', data=metadata_json)
+        
+        # ラベル保存（オプション）
+        if labels is not None:
+            logger.info("   📊 ラベル保存")
+            labels_group = f.create_group('labels')
+            labels_group.create_dataset('direction', data=labels['direction'], dtype='int64')
+            labels_group.create_dataset('magnitude', data=labels['magnitude'], dtype='float32')
+            logger.info(f"      Direction: {labels['direction'].shape}")
+            logger.info(f"      Magnitude: {labels['magnitude'].shape}")
     
     logger.info(f"   出力ファイル: {output_file.name}")
     logger.info(f"   ファイルサイズ: {output_file.stat().st_size / 1024 / 1024:.2f} MB")
@@ -418,8 +428,136 @@ def main():
         # カテゴリ情報取得
         category_info = integrator.get_category_info()
         
-        # 特徴量保存
-        output_file = save_features(features, category_info, config, logger, integrator)
+        # ラベル生成（有効な場合）
+        labels = None
+        if config.get('label_generation', {}).get('enabled', False):
+            logger.info("=" * 80)
+            logger.info("🏷️  ラベル生成開始")
+            logger.info("=" * 80)
+            
+            label_gen_config = config['label_generation']
+            
+            # キャッシュファイルパス
+            cache_dir = PROJECT_ROOT / "data" / "feature_calculator"
+            cache_dir.mkdir(exist_ok=True)
+            cache_file = cache_dir / "labels.h5"
+            
+            # 再計算判定
+            recalculate_categories = config.get('recalculate_categories')
+            should_recalculate = recalculate_categories is None or 'labels' in recalculate_categories
+            
+            # キャッシュ確認
+            if cache_file.exists() and not should_recalculate:
+                # キャッシュ使用
+                logger.info(f"💾 labels キャッシュ使用")
+                
+                try:
+                    with h5py.File(cache_file, 'r') as f:
+                        labels = {
+                            'direction': f['direction'][:],
+                            'magnitude': f['magnitude'][:]
+                        }
+                        metadata = json.loads(f['metadata'][()].decode('utf-8'))
+                        
+                        logger.info(f"   → Direction: {labels['direction'].shape}")
+                        logger.info(f"   → Magnitude: {labels['magnitude'].shape}")
+                        logger.info(f"   → 生成日時: {metadata.get('created_at', 'N/A')}")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️  labels キャッシュ読み込み失敗: {e}")
+                    logger.warning("   → 再計算します")
+                    labels = None
+            
+            # キャッシュがない、または再計算が必要な場合
+            if labels is None:
+                # 既存キャッシュをリネーム
+                if cache_file.exists():
+                    from datetime import datetime, timezone, timedelta
+                    file_mtime = cache_file.stat().st_mtime
+                    file_dt = datetime.fromtimestamp(file_mtime, tz=timezone(timedelta(hours=9)))
+                    timestamp_str = file_dt.strftime('%Y%m%d_%H%M%S')
+                    backup_file = cache_dir / f"{timestamp_str}_labels.h5"
+                    cache_file.rename(backup_file)
+                    logger.info(f"💾 labels 既存キャッシュリネーム: {backup_file.name}")
+                
+                # ラベル生成
+                label_generator = LabelGenerator(
+                    k_spread=label_gen_config.get('k_spread', 1.0),
+                    k_atr=label_gen_config.get('k_atr', 0.3),
+                    spread_default=label_gen_config.get('spread_default', 1.2),
+                    atr_period=label_gen_config.get('atr_period', 14),
+                    pip_value=label_gen_config.get('pip_value', 0.01)
+                )
+                
+                # 生データパス
+                collector_path = PROJECT_ROOT / "data" / "data_collector.h5"
+                
+                # シーケンス数計算（prediction_horizon分引く）
+                n_sequences = len(features) - label_gen_config.get('prediction_horizon', 36)
+                if n_sequences <= 0:
+                    logger.warning(f"⚠️  データ不足: features={len(features)}, horizon={label_gen_config.get('prediction_horizon', 36)}")
+                    logger.warning("   ラベル生成をスキップします")
+                else:
+                    # ラベル生成
+                    logger.info(f"🧮 labels 計算開始")
+                    label_result = label_generator.generate_labels(
+                        preprocessor_path=None,  # 未保存なのでNone
+                        collector_path=collector_path,
+                        prediction_horizon=label_gen_config.get('prediction_horizon', 36),
+                        n_sequences=n_sequences
+                    )
+                    
+                    # ラベル品質検証
+                    label_generator.validate_labels(label_result, logger)
+                    
+                    # 有効サンプル確認
+                    n_valid = np.sum(label_result['valid_mask'])
+                    valid_ratio = n_valid / len(label_result['valid_mask'])
+                    
+                    min_valid_ratio = label_gen_config.get('min_valid_samples_ratio', 0.9)
+                    if valid_ratio < min_valid_ratio:
+                        logger.warning(f"⚠️  有効サンプル比率が低すぎます: {valid_ratio:.2%} < {min_valid_ratio:.0%}")
+                        logger.warning("   ラベル生成をスキップします")
+                    else:
+                        # 有効サンプルのみ抽出
+                        valid_mask = label_result['valid_mask']
+                        labels = {
+                            'direction': label_result['direction'][valid_mask],
+                            'magnitude': label_result['magnitude'][valid_mask]
+                        }
+                        
+                        # キャッシュ保存
+                        try:
+                            from datetime import datetime, timezone, timedelta
+                            jst_now = datetime.now(timezone(timedelta(hours=9)))
+                            
+                            with h5py.File(cache_file, 'w') as f:
+                                f.create_dataset('direction', data=labels['direction'], dtype='int64')
+                                f.create_dataset('magnitude', data=labels['magnitude'], dtype='float32')
+                                
+                                # メタデータ
+                                metadata = {
+                                    'created_at': jst_now.isoformat(),
+                                    'n_samples': len(labels['direction']),
+                                    'prediction_horizon': label_gen_config.get('prediction_horizon', 36),
+                                    'k_spread': label_gen_config.get('k_spread', 1.0),
+                                    'k_atr': label_gen_config.get('k_atr', 0.3)
+                                }
+                                metadata_json = json.dumps(metadata, ensure_ascii=False).encode('utf-8')
+                                f.create_dataset('metadata', data=metadata_json)
+                            
+                            logger.info(f"   💾 保存: labels.h5")
+                        except Exception as e:
+                            logger.warning(f"⚠️  labels キャッシュ保存失敗: {e}")
+                        
+                        # 特徴量も同様にフィルタ（最初のn_sequences行を使用）
+                        features = features.iloc[:n_sequences][valid_mask].reset_index(drop=True)
+                        
+                        logger.info(f"   → {len(labels['direction'])}列生成")
+                        logger.info(f"✅ ラベル生成完了: {len(labels['direction'])} サンプル")
+        
+        # 特徴量保存（ラベル含む）
+        output_file = save_features(features, category_info, config, logger, integrator, labels)
         
         # レポート生成
         generate_report(features, category_info, config, output_file, integrator, logger)

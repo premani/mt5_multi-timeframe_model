@@ -28,7 +28,6 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, mea
 # 相対インポート
 sys.path.append(str(Path(__file__).parent))
 from utils.logging_manager import LoggingManager
-from trainer.label_generator import LabelGenerator
 
 
 class MultiTFDataset(Dataset):
@@ -288,43 +287,37 @@ class Trainer:
             # 正規化パラメータ読み込み（推論時必要）
             scaler_params = json.loads(f["scaler_params"][()])
             
-            # ラベル生成（Phase 0: 基本実装）
-            self.logger.info("🏷️  ラベル生成")
-            label_generator = LabelGenerator(
-                k_spread=self.config.get("label_generation", {}).get("k_spread", 1.0),
-                k_atr=self.config.get("label_generation", {}).get("k_atr", 0.3),
-                spread_default=self.config.get("label_generation", {}).get("spread_default", 1.2),
-                atr_period=self.config.get("label_generation", {}).get("atr_period", 14),
-                pip_value=0.01  # USDJPY
-            )
-            
-            # 生データパスを構築
-            collector_path = Path("data/data_collector.h5")
-            if not collector_path.exists():
-                raise FileNotFoundError(f"生データが見つかりません: {collector_path}")
-            
-            label_result = label_generator.generate_labels(
-                preprocessor_path=data_path,
-                collector_path=collector_path,
-                prediction_horizon=self.config.get("label_generation", {}).get("prediction_horizon", 36)
-            )
-            
-            # ラベル品質検証
-            label_generator.validate_labels(label_result, self.logger)
-            
-            # 有効サンプルのみ使用
-            valid_mask = label_result['valid_mask']
-            labels = {
-                "direction": label_result['direction'][valid_mask],
-                "magnitude": label_result['magnitude'][valid_mask]
-            }
-            
-            # 各TFのシーケンスを有効サンプル数に統一
-            # M5基準でラベル生成しているため、M5のサンプル数で統一
-            n_valid = len(labels["direction"])
-            sequences = {tf: seq[:n_valid] for tf, seq in sequences.items()}
-            n_samples = n_valid
-            self.logger.info(f"   有効サンプル数: {n_samples}")
+            # ラベル読み込み（前処理で生成済み）
+            self.logger.info("🏷️  ラベル読み込み")
+            if "labels" in f:
+                labels = {
+                    "direction": f["labels/direction"][:],
+                    "magnitude": f["labels/magnitude"][:]
+                }
+                self.logger.info(f"   Direction: {labels['direction'].shape}")
+                self.logger.info(f"   Magnitude: {labels['magnitude'].shape}")
+                
+                # ラベル統計表示
+                n_up = np.sum(labels['direction'] == 2)
+                n_neutral = np.sum(labels['direction'] == 1)
+                n_down = np.sum(labels['direction'] == 0)
+                total = len(labels['direction'])
+                
+                self.logger.info(f"   Direction分布:")
+                self.logger.info(f"      UP: {n_up} ({n_up/total*100:.1f}%)")
+                self.logger.info(f"      NEUTRAL: {n_neutral} ({n_neutral/total*100:.1f}%)")
+                self.logger.info(f"      DOWN: {n_down} ({n_down/total*100:.1f}%)")
+                
+                mag_mean = np.mean(labels['magnitude'])
+                mag_median = np.median(labels['magnitude'])
+                self.logger.info(f"   Magnitude: 平均 {mag_mean:.2f} pips, 中央値 {mag_median:.2f} pips")
+                
+                # シーケンス数をラベル数に統一
+                n_samples = len(labels['direction'])
+                sequences = {tf: seq[:n_samples] for tf, seq in sequences.items()}
+                self.logger.info(f"   サンプル数: {n_samples}")
+            else:
+                raise ValueError("ラベルが見つかりません。前処理でラベル生成を有効化してください。")
         
         # データ分割
         train_data, val_data, test_data = self._split_data(sequences, labels)

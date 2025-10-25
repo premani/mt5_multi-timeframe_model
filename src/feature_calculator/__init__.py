@@ -10,9 +10,11 @@
 from .base_calculator import BaseCalculator
 from .basic_multi_tf import BasicMultiTFCalculator
 from .session_time import SessionTimeCalculator
+from .label_generator import LabelGenerator
 
 __all__ = [
     'BaseCalculator',
     'BasicMultiTFCalculator',
     'SessionTimeCalculator',
+    'LabelGenerator',
 ]
