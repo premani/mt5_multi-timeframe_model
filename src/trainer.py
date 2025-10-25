@@ -28,6 +28,7 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, mea
 # 相対インポート
 sys.path.append(str(Path(__file__).parent))
 from utils.logging_manager import LoggingManager
+from trainer.label_generator import LabelGenerator
 
 
 class MultiTFDataset(Dataset):
@@ -268,12 +269,12 @@ class Trainer:
     def _load_data(self) -> Dict:
         """データ読み込み"""
         self.logger.info("📂 データ読み込み")
-        input_file = self.config["io"]["input_file"]
+        data_path = Path(self.config["io"]["input_file"])
         
-        with h5py.File(input_file, "r") as f:
+        with h5py.File(data_path, "r") as f:
             # メタデータ確認
             metadata = json.loads(f["metadata"][()])
-            self.logger.info(f"   入力ファイル: {input_file}")
+            self.logger.info(f"   入力ファイル: {data_path}")
             self.logger.info(f"   生成日時: {metadata['processing_timestamp']}")
             self.logger.info(f"   特徴量数: {metadata['filter_stats']['initial']} → {metadata['filter_stats']['final']}")
             
@@ -287,21 +288,43 @@ class Trainer:
             # 正規化パラメータ読み込み（推論時必要）
             scaler_params = json.loads(f["scaler_params"][()])
             
-            # Phase 0: ダミーラベル生成（仮実装）
-            # TODO: 実際のラベル生成ロジックを実装
-            # 各TFのサンプル数が異なるため、最小数に揃える
-            min_samples = min(len(seq) for seq in sequences.values())
+            # ラベル生成（Phase 0: 基本実装）
+            self.logger.info("🏷️  ラベル生成")
+            label_generator = LabelGenerator(
+                k_spread=self.config.get("label_generation", {}).get("k_spread", 1.0),
+                k_atr=self.config.get("label_generation", {}).get("k_atr", 0.3),
+                spread_default=self.config.get("label_generation", {}).get("spread_default", 1.2),
+                atr_period=self.config.get("label_generation", {}).get("atr_period", 14),
+                pip_value=0.01  # USDJPY
+            )
             
-            # シーケンスを最小サンプル数に揃える
-            sequences = {tf: seq[:min_samples] for tf, seq in sequences.items()}
+            # 生データパスを構築
+            collector_path = Path("data/data_collector.h5")
+            if not collector_path.exists():
+                raise FileNotFoundError(f"生データが見つかりません: {collector_path}")
             
-            n_samples = min_samples
+            label_result = label_generator.generate_labels(
+                preprocessor_path=data_path,
+                collector_path=collector_path,
+                prediction_horizon=self.config.get("label_generation", {}).get("prediction_horizon", 36)
+            )
+            
+            # ラベル品質検証
+            label_generator.validate_labels(label_result, self.logger)
+            
+            # 有効サンプルのみ使用
+            valid_mask = label_result['valid_mask']
             labels = {
-                "direction": np.random.randint(0, 3, n_samples),  # UP/DOWN/NEUTRAL
-                "magnitude": np.random.uniform(0.5, 5.0, n_samples)  # pips
+                "direction": label_result['direction'][valid_mask],
+                "magnitude": label_result['magnitude'][valid_mask]
             }
-            self.logger.warning("⚠️  Phase 0: ダミーラベル使用中（実装待ち）")
-            self.logger.info(f"   サンプル数を {min_samples} に統一")
+            
+            # 各TFのシーケンスを有効サンプル数に統一
+            # M5基準でラベル生成しているため、M5のサンプル数で統一
+            n_valid = len(labels["direction"])
+            sequences = {tf: seq[:n_valid] for tf, seq in sequences.items()}
+            n_samples = n_valid
+            self.logger.info(f"   有効サンプル数: {n_samples}")
         
         # データ分割
         train_data, val_data, test_data = self._split_data(sequences, labels)

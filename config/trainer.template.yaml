@@ -4,6 +4,18 @@
 # 通貨ペア設定（Phase 0: 固定）
 currency_pair: "USDJPY"
 
+# ラベル生成設定（Phase 0: 基本実装）
+label_generation:
+  # NEUTRAL閾値パラメータ
+  k_spread: 1.0               # スプレッド倍率（コスト考慮）
+  k_atr: 0.3                  # ATR倍率（ノイズ除外）
+  spread_default: 1.2         # デフォルトスプレッド（pips）
+  atr_period: 14              # ATR計算期間
+  
+  # 予測時間設定
+  prediction_horizon: 36      # 予測先時間（シーケンス数）
+                              # M5基準: 36 × 5分 = 180分（3時間）
+
 # モデルアーキテクチャ設定
 model:
   # TF別LSTM設定
