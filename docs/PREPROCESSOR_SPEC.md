@@ -1,7 +1,7 @@
 # PREPROCESSOR_SPEC.md
 
-**バージョン**: 2.0
-**更新日**: 2025-10-22
+**バージョン**: 2.1
+**更新日**: 2025-10-25
 **責任者**: core-team
 **処理段階**: 第3段階: 前処理（正規化・シーケンス化）
 
@@ -823,7 +823,11 @@ preprocessing:
 ### 実装時の注意
 
 1. **第2段階の計算結果を信頼**: 特徴量の再計算禁止
-2. **正規化パラメータの保存必須**: 推論時の逆変換に必要
+2. **正規化パラメータの保存必須**: 
+   - 推論時の逆変換に必要（`scaler_params` を必ず保存）
+   - 学習時と推論時で同じパラメータを使用（再計算禁止）
+   - モデルファイルと `scaler_params` を必ずセットで管理
+   - 詳細は「[🔄 推論時の復元](#-推論時の復元)」セクション参照
 3. **シーケンス長の固定**: MULTI_TF_FUSION_SPEC.md の設計に準拠
 4. **未来リーク検査は必須**: エラー時は即座に停止
 
@@ -850,6 +854,221 @@ preprocessing:
 
 ---
 
+## 🔄 推論時の復元
+
+### 概要
+
+**学習時に保存した正規化パラメータを使用して、モデル予測値を元のスケールに復元する手順**。
+
+**重要原則**:
+1. **学習時と同じパラメータを使用**: 推論時に正規化パラメータを再計算してはいけない
+2. **パラメータの一意性保証**: モデルファイルと `scaler_params` を必ずセットで管理
+3. **特徴量順序の一致**: `feature_names` で列順序を保証
+
+### パラメータ読み込み
+
+**HDF5から正規化パラメータを読み込み**:
+
+```python
+import h5py
+import json
+import numpy as np
+from sklearn.preprocessing import RobustScaler
+
+def load_scaler_params(preprocessed_h5_path: str) -> RobustScaler:
+    """
+    学習時に保存した正規化パラメータをRobustScalerとして復元
+    
+    Args:
+        preprocessed_h5_path: 前処理済みHDF5ファイルパス
+        
+    Returns:
+        復元されたRobustScalerインスタンス
+        
+    Raises:
+        KeyError: scaler_paramsが存在しない
+        ValueError: パラメータ形式が不正
+    """
+    with h5py.File(preprocessed_h5_path, 'r') as f:
+        # JSON形式で保存されたパラメータを読み込み
+        scaler_params = json.loads(f['scaler_params'][()])
+        
+        # RobustScalerを復元
+        scaler = RobustScaler()
+        scaler.center_ = np.array(scaler_params['center_'])
+        scaler.scale_ = np.array(scaler_params['scale_'])
+        
+        # 特徴量名も復元（順序検証用）
+        feature_names = scaler_params['feature_names']
+        scaler.feature_names_in_ = np.array(feature_names)
+        scaler.n_features_in_ = len(feature_names)
+        
+    return scaler, feature_names
+```
+
+### 予測値の逆変換
+
+**モデル出力（正規化値）を元のスケールに復元**:
+
+```python
+def inverse_transform_predictions(
+    predictions_normalized: np.ndarray,
+    scaler: RobustScaler
+) -> np.ndarray:
+    """
+    正規化された予測値を元のスケールに復元
+    
+    Args:
+        predictions_normalized: モデル出力（正規化値）
+        scaler: load_scaler_paramsで復元したScaler
+        
+    Returns:
+        元のスケールに復元された予測値
+        
+    Example:
+        >>> # モデル予測（正規化値）
+        >>> predictions_norm = model.predict(input_sequences)
+        >>> # 元のスケールに復元
+        >>> predictions_original = inverse_transform_predictions(
+        ...     predictions_norm, scaler
+        ... )
+    """
+    # inverse_transformで元のスケールに復元
+    predictions_original = scaler.inverse_transform(predictions_normalized)
+    
+    return predictions_original
+```
+
+### 推論パイプライン全体例
+
+```python
+def inference_pipeline(
+    raw_data: pd.DataFrame,
+    preprocessed_h5_path: str,
+    model_path: str
+) -> np.ndarray:
+    """
+    推論時の完全なパイプライン
+    
+    Args:
+        raw_data: 生データ（特徴量計算前）
+        preprocessed_h5_path: 学習時の前処理パラメータ
+        model_path: 学習済みモデル
+        
+    Returns:
+        元のスケールでの予測値
+    """
+    # 1. 正規化パラメータ読み込み
+    scaler, feature_names = load_scaler_params(preprocessed_h5_path)
+    
+    # 2. 同じ順序で特徴量を選択・正規化
+    features = raw_data[feature_names]  # 列順序を保証
+    features_normalized = scaler.transform(features)  # fit_transformではなくtransform
+    
+    # 3. シーケンス化（学習時と同じウィンドウサイズ）
+    sequences = create_sequences_for_inference(features_normalized)
+    
+    # 4. モデル予測
+    model = load_model(model_path)
+    predictions_normalized = model.predict(sequences)
+    
+    # 5. 元のスケールに復元
+    predictions_original = inverse_transform_predictions(
+        predictions_normalized, scaler
+    )
+    
+    return predictions_original
+```
+
+### 重要な注意事項
+
+#### 1. 学習時と同じパラメータを使用
+
+❌ **NG**: 推論時に再計算
+```python
+# 推論時に新たにfit → パラメータがバラつく
+scaler = RobustScaler()
+scaler.fit(inference_data)  # 絶対禁止
+predictions_norm = model.predict(scaler.transform(inference_data))
+```
+
+✅ **OK**: 学習時のパラメータを読み込み
+```python
+# 学習時のパラメータを復元
+scaler, _ = load_scaler_params('data/preprocessor.h5')
+predictions_norm = model.predict(scaler.transform(inference_data))
+predictions_original = scaler.inverse_transform(predictions_norm)
+```
+
+#### 2. パラメータの一意性保証
+
+**モデルと `scaler_params` を必ずセットで管理**:
+
+```
+models/
+├── fx_lstm_model_20251023_143045.pth         # 学習済みモデル
+└── fx_lstm_model_20251023_143045_preprocessed.h5  # 対応する正規化パラメータ
+```
+
+**推奨ファイル管理方法**:
+- タイムスタンプで対応関係を保証
+- メタデータに `preprocessed_h5_hash` を記録
+- 誤った組み合わせ検出機能
+
+#### 3. 特徴量順序の一致
+
+**`feature_names` で列順序を保証**:
+
+```python
+# HDF5から特徴量名を読み込み
+_, feature_names = load_scaler_params('data/preprocessor.h5')
+
+# 推論時も同じ順序で選択
+inference_features = raw_data[feature_names]  # 順序が一致
+```
+
+#### 4. ONNX変換時の扱い
+
+**Option 1: 前処理・後処理を外部化**
+```python
+# ONNX変換前に正規化
+features_norm = scaler.transform(features)
+onnx_output = onnx_model.run(None, {'input': features_norm})
+predictions = scaler.inverse_transform(onnx_output[0])
+```
+
+**Option 2: 前処理をONNXグラフに統合**（将来拡張）
+- RobustScaler演算をONNX opに変換
+- パラメータ（center_, scale_）をグラフ定数として埋め込み
+
+### 検証方法
+
+**学習時と推論時の一致を確認**:
+
+```python
+def verify_inference_consistency():
+    """
+    学習データで推論パイプラインを実行し、
+    学習時の正規化値と一致するか検証
+    """
+    # 学習時の正規化値を読み込み
+    with h5py.File('data/preprocessor.h5', 'r') as f:
+        train_normalized = f['sequences']['M5'][:]  # 例: M5シーケンス
+    
+    # 推論パイプラインで同じデータを処理
+    scaler, feature_names = load_scaler_params('data/preprocessor.h5')
+    inference_normalized = scaler.transform(train_features[feature_names])
+    
+    # 一致確認（浮動小数点誤差を考慮）
+    np.testing.assert_allclose(
+        train_normalized,
+        inference_normalized,
+        rtol=1e-7,
+        err_msg="推論時の正規化が学習時と不一致"
+    )
+```
+
+---
 
 ## 📚 サブ仕様書
 
@@ -881,4 +1100,5 @@ preprocessing:
 ---
 
 **更新履歴**:
-- 2025-10-22: サブ仕様書に分離（INPUT_QUALITY, DATA_INTEGRITY, NORMALIZATION）
+- 2025-10-25 (v2.1): 推論時の復元セクション追加（パラメータ読み込み・逆変換手順の明確化）
+- 2025-10-22 (v2.0): サブ仕様書に分離（INPUT_QUALITY, DATA_INTEGRITY, NORMALIZATION）
