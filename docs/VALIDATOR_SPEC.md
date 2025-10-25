@@ -1,6 +1,6 @@
 # VALIDATOR_SPEC.md
 
-**バージョン**: 1.1 (Phase 0実装)
+**バージョン**: 1.3 (Phase 0実装)
 **更新日**: 2025-10-25
 **責任者**: core-team
 **処理段階**: 第5段階: 検証・評価
@@ -13,16 +13,21 @@
 |-----------|------|---------|
 | 1.0 | 2025-10-21 | 初版作成（デュアルモード対応仕様） |
 | 1.1 | 2025-10-25 | Phase 0実装（シンプルLSTM検証） |
+| 1.2 | 2025-10-25 | 出力先models/に変更、JSON+MD両方出力 |
+| 1.3 | 2025-10-25 | 命名規約修正（タイムスタンプなし基本、既存時バックアップ） |
 
 ---
 
 ## 🎯 Phase 0実装範囲
 
-### ✅ 実装済み（v1.1）
+### ✅ 実装済み（v1.3）
 - 基本的な方向予測評価（Accuracy, Precision, Recall, F1）
 - 価格幅予測評価（MAE, RMSE, R²）
-- JSONレポート出力
+- JSON + Markdownレポート出力（models/ディレクトリ）
 - 確認ツール（inspect_validation.py）
+- 命名規約準拠（タイムスタンプなし基本、既存時自動バックアップ）
+- マルチTFモデル対応（MultiTFModel読み込み）
+- PyTorch 2.8対応（weights_only=False）
 
 ### 📋 未実装（Phase 1以降）
 - デュアルモード対応（Scalp/Swing別評価）
@@ -321,9 +326,20 @@ drift_detection:
 | `models/validator_confusion_matrix.png` | 混同行列（オプション） | ❌ 除外 |
 | `models/validator_calibration_curve.png` | キャリブレーション曲線 | ❌ 除外 |
 
-**バックアップ**: 既存ファイルは `YYYYMMDD_HHMMSS_validator_*.<ext>` にリネーム (JST)
+**命名規約**:
+- 基本ファイル名: `validator_report.json` / `validator_report.md`（タイムスタンプなし）
+- 既存ファイルがある場合: 既存ファイルを `validator_YYYYMMDD_HHMMSS_report.*` にリネーム後、新ファイルを作成
+- タイムスタンプは既存ファイルの変更時刻を使用（JST）
 
-例: `20251024_160000_validator_report.json`
+例:
+```
+# 初回実行
+models/validator_report.json  ← 新規作成
+
+# 2回目実行
+models/validator_20251025_220556_report.json  ← 既存ファイルをリネーム
+models/validator_report.json  ← 新規作成
+```
 
 **注**: 検証フェーズはモデルファイルを生成しないため、レポートのみ出力
 

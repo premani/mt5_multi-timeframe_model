@@ -11,7 +11,7 @@ input:
 # 出力設定
 output:
   # 検証レポート出力ディレクトリ
-  report_dir: "data"
+  report_dir: "models"
   
   # 混同行列可視化（オプション）
   save_confusion_matrix: true

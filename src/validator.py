@@ -39,54 +39,13 @@ sys.path.insert(0, str(project_root))
 
 from src.utils.logging_manager import LoggingManager
 
-
-class SimpleLSTMModel(nn.Module):
-    """シンプルLSTMモデル（学習時と同じ構造）"""
-    
-    def __init__(self, input_size: int, hidden_size: int = 128, num_layers: int = 2):
-        super().__init__()
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=0.2
-        )
-        
-        # Direction head (3クラス: UP/DOWN/NEUTRAL)
-        self.direction_head = nn.Sequential(
-            nn.Linear(hidden_size, 64),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 3)
-        )
-        
-        # Magnitude head (価格幅回帰)
-        self.magnitude_head = nn.Sequential(
-            nn.Linear(hidden_size, 64),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 1)
-        )
-    
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            x: (batch, seq_len, features)
-        
-        Returns:
-            direction_logits: (batch, 3)
-            magnitude_pred: (batch, 1)
-        """
-        # LSTM
-        lstm_out, _ = self.lstm(x)
-        last_hidden = lstm_out[:, -1, :]
-        
-        # マルチタスク出力
-        direction_logits = self.direction_head(last_hidden)
-        magnitude_pred = self.magnitude_head(last_hidden)
-        
-        return direction_logits, magnitude_pred
+# trainer.pyからモデル定義をインポート
+import importlib.util
+trainer_spec = importlib.util.spec_from_file_location("trainer_module", Path(__file__).parent / "trainer.py")
+trainer_module = importlib.util.module_from_spec(trainer_spec)
+trainer_spec.loader.exec_module(trainer_module)
+MultiTFModel = trainer_module.MultiTFModel
+TFEncoder = trainer_module.TFEncoder
 
 
 class Validator:
@@ -107,45 +66,74 @@ class Validator:
         self.logger.info(f"🎯 検証処理開始")
         self.logger.info(f"   デバイス: {self.device}")
     
-    def load_data(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """前処理済みデータ読み込み"""
+    def load_data(self) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+        """前処理済みデータ読み込み（全データから検証用を抽出）"""
         input_path = Path(self.config['input']['preprocessed_file'])
         
         self.logger.info(f"📂 データ読み込み: {input_path.name}")
         
+        sequences = {}
         with h5py.File(input_path, 'r') as f:
-            # テストデータ取得
-            test_sequences = f['test/sequences'][:]
-            test_direction = f['test/labels/direction'][:]
-            test_magnitude = f['test/labels/magnitude'][:]
+            # 全シーケンス読み込み（マルチTF）
+            for tf in f['sequences'].keys():
+                sequences[tf] = f[f'sequences/{tf}'][:]
+                self.logger.info(f"   {tf}: {sequences[tf].shape}")
             
-            self.logger.info(f"   テストデータ: {test_sequences.shape}")
-            self.logger.info(f"   Direction: {test_direction.shape}")
-            self.logger.info(f"   Magnitude: {test_magnitude.shape}")
+            # ラベル読み込み
+            all_direction = f['labels/direction'][:]
+            all_magnitude = f['labels/magnitude'][:]
+            
+            self.logger.info(f"   Direction: {all_direction.shape}")
+            self.logger.info(f"   Magnitude: {all_magnitude.shape}")
         
-        # Tensorに変換
-        test_sequences = torch.from_numpy(test_sequences).float()
-        test_direction = torch.from_numpy(test_direction).long()
-        test_magnitude = torch.from_numpy(test_magnitude).float()
+        # 最小サンプル数でアライメント（全TFで共通の長さ）
+        min_samples = min(len(all_direction), len(all_magnitude), 
+                         min(seq.shape[0] for seq in sequences.values()))
+        
+        # 検証用データ分割（後半20%を使用）
+        test_size = int(min_samples * 0.2)
+        test_start = min_samples - test_size
+        
+        self.logger.info(f"   アライメント後: {min_samples} サンプル")
+        self.logger.info(f"   検証データ: {test_start}〜{min_samples} ({test_size} サンプル)")
+        
+        # テストデータ抽出
+        test_sequences = {
+            tf: torch.from_numpy(seq[test_start:min_samples]).float()
+            for tf, seq in sequences.items()
+        }
+        test_direction = torch.from_numpy(all_direction[test_start:min_samples]).long()
+        test_magnitude = torch.from_numpy(all_magnitude[test_start:min_samples]).float()
         
         return test_sequences, test_direction, test_magnitude
     
-    def load_model(self, input_size: int) -> SimpleLSTMModel:
+    def load_model(self) -> MultiTFModel:
         """学習済みモデル読み込み"""
         model_path = Path(self.config['input']['model_file'])
         
         self.logger.info(f"🔧 モデル読み込み: {model_path.name}")
         
-        # モデル構築
-        model = SimpleLSTMModel(
-            input_size=input_size,
-            hidden_size=128,
-            num_layers=2
-        )
+        # チェックポイント読み込み（PyTorch 2.8対応）
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+        
+        # モデル構築（設定から復元）
+        model_config = checkpoint.get('config', self.config)
+        model = MultiTFModel(model_config)
+        
+        # エンコーダを動的追加（チェックポイントから構造を復元）
+        state_dict = checkpoint['model_state_dict']
+        for key in state_dict.keys():
+            if key.startswith('encoders.'):
+                tf_name = key.split('.')[1]
+                # 最初の重みからinput_sizeを推定
+                weight_key = f'encoders.{tf_name}.lstm.weight_ih_l0'
+                if weight_key in state_dict:
+                    input_size = state_dict[weight_key].shape[1]
+                    if tf_name not in model.encoders:
+                        model.add_encoder(tf_name, input_size)
         
         # 重み読み込み
-        checkpoint = torch.load(model_path, map_location=self.device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(state_dict)
         model.to(self.device)
         model.eval()
         
@@ -156,29 +144,38 @@ class Validator:
     
     def predict(
         self,
-        model: SimpleLSTMModel,
-        sequences: torch.Tensor,
+        model: MultiTFModel,
+        sequences: Dict[str, torch.Tensor],
         batch_size: int
     ) -> Tuple[np.ndarray, np.ndarray]:
         """推論実行"""
         self.logger.info(f"🔄 推論実行中...")
         
+        # サンプル数取得（全TF共通）
+        n_samples = len(next(iter(sequences.values())))
+        
         all_direction_preds = []
         all_magnitude_preds = []
         
         with torch.no_grad():
-            for i in range(0, len(sequences), batch_size):
-                batch = sequences[i:i+batch_size].to(self.device)
+            for i in range(0, n_samples, batch_size):
+                # バッチ作成
+                batch = {
+                    tf: seq[i:i+batch_size].to(self.device)
+                    for tf, seq in sequences.items()
+                }
                 
                 # 推論
-                direction_logits, magnitude_pred = model(batch)
+                output = model(batch)
+                direction_logits = output["direction"]
+                magnitude_pred = output["magnitude"]
                 
                 # Direction: argmax
                 direction_pred = torch.argmax(direction_logits, dim=1).cpu().numpy()
                 all_direction_preds.append(direction_pred)
                 
                 # Magnitude
-                magnitude_pred = magnitude_pred.squeeze().cpu().numpy()
+                magnitude_pred = magnitude_pred.cpu().numpy()
                 all_magnitude_preds.append(magnitude_pred)
         
         # 結合
@@ -253,14 +250,97 @@ class Validator:
         }
     
     def save_report(self, report: Dict[str, Any], output_dir: Path):
-        """レポート保存"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = output_dir / f"fx_lstm_model_{timestamp}_validation_report.json"
+        """レポート保存（JSON + Markdown）
         
-        with open(report_path, 'w', encoding='utf-8') as f:
+        命名規約:
+        - 基本: validator_report.json / validator_report.md
+        - 既存ファイルがある場合: 既存ファイルを validator_YYYYMMDD_HHMMSS_report.* にリネーム
+        """
+        import os
+        
+        # 基本ファイル名（タイムスタンプなし）
+        json_path = output_dir / "validator_report.json"
+        md_path = output_dir / "validator_report.md"
+        
+        # 既存ファイルのバックアップ
+        for path in [json_path, md_path]:
+            if path.exists():
+                # 既存ファイルの変更時刻を取得
+                mtime = os.path.getmtime(path)
+                timestamp = datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
+                
+                # リネーム先
+                backup_name = f"validator_{timestamp}_report{path.suffix}"
+                backup_path = path.parent / backup_name
+                
+                # リネーム
+                path.rename(backup_path)
+                self.logger.info(f"📦 既存ファイルをバックアップ: {backup_name}")
+        
+        # JSONレポート保存
+        with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
+        self.logger.info(f"💾 JSONレポート保存: {json_path.name}")
         
-        self.logger.info(f"💾 レポート保存: {report_path.name}")
+        # Markdownレポート保存
+        self._save_markdown_report(report, md_path)
+        self.logger.info(f"💾 Markdownレポート保存: {md_path.name}")
+    
+    def _save_markdown_report(self, report: Dict[str, Any], md_path: Path):
+        """Markdownレポート生成"""
+        lines = [
+            "# 検証レポート",
+            "",
+            f"**検証日時**: {report['timestamp']}",
+            f"**モデル**: {Path(report['model_file']).name}",
+            f"**データ**: {Path(report['preprocessed_file']).name}",
+            f"**テストサンプル数**: {report['test_samples']:,}",
+            "",
+            "---",
+            "",
+            "## 🎯 方向予測評価",
+            "",
+            f"**Accuracy**: {report['direction_metrics']['accuracy']:.4f}",
+            "",
+            "### クラス別指標",
+            "",
+            "| クラス | Precision | Recall | F1-Score |",
+            "|--------|-----------|--------|----------|"
+        ]
+        
+        class_names = ['DOWN', 'NEUTRAL', 'UP']
+        for i, name in enumerate(class_names):
+            precision = report['direction_metrics']['precision'][i]
+            recall = report['direction_metrics']['recall'][i]
+            f1 = report['direction_metrics']['f1_score'][i]
+            lines.append(f"| {name:8s} | {precision:.4f} | {recall:.4f} | {f1:.4f} |")
+        
+        lines.extend([
+            "",
+            "### 混同行列",
+            "",
+            "|         | DOWN | NEUTRAL | UP   |",
+            "|---------|------|---------|------|"
+        ])
+        
+        cm = report['direction_metrics']['confusion_matrix']
+        for i, name in enumerate(class_names):
+            lines.append(f"| {name:7s} | {cm[i][0]:4d} | {cm[i][1]:7d} | {cm[i][2]:4d} |")
+        
+        lines.extend([
+            "",
+            "---",
+            "",
+            "## 📊 価格幅予測評価",
+            "",
+            f"- **MAE**: {report['magnitude_metrics']['mae']:.4f} pips",
+            f"- **RMSE**: {report['magnitude_metrics']['rmse']:.4f} pips",
+            f"- **R²**: {report['magnitude_metrics']['r2']:.4f}",
+            ""
+        ])
+        
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
     
     def run(self):
         """検証実行"""
@@ -269,8 +349,7 @@ class Validator:
             test_sequences, test_direction, test_magnitude = self.load_data()
             
             # モデル読み込み
-            input_size = test_sequences.shape[2]
-            model = self.load_model(input_size)
+            model = self.load_model()
             
             # 推論
             batch_size = self.config['batch']['size']
@@ -305,7 +384,7 @@ class Validator:
             self.logger.info(f"✅ 検証完了")
             
         except Exception as e:
-            self.logger.error(f"❌ 検証失敗: {e}", exc_info=True)
+            self.logger.error(f"❌ 検証失敗: {e}")
             raise
 
 

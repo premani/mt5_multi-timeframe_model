@@ -4,7 +4,6 @@
 import sys
 from pathlib import Path
 import json
-import glob
 
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -12,20 +11,19 @@ sys.path.insert(0, str(project_root))
 
 def main():
     """メイン処理"""
-    # 最新のレポート取得
-    report_pattern = "data/*_validation_report.json"
-    reports = sorted(glob.glob(report_pattern))
+    # レポートファイル（基本名）
+    report_path = "models/validator_report.json"
     
-    if not reports:
-        print(f"❌ レポートが見つかりません: {report_pattern}")
+    if not Path(report_path).exists():
+        print(f"❌ レポートが見つかりません: {report_path}")
+        print(f"   検証処理を実行してください: bash ./docker_run.sh python3 src/validator.py")
         return
     
-    latest_report = reports[-1]
-    print(f"📂 検証レポート: {Path(latest_report).name}")
+    print(f"📂 検証レポート: {Path(report_path).name}")
     print("=" * 80)
     
     # レポート読み込み
-    with open(latest_report, 'r', encoding='utf-8') as f:
+    with open(report_path, 'r', encoding='utf-8') as f:
         report = json.load(f)
     
     # 基本情報
