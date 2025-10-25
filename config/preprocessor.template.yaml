@@ -1,0 +1,59 @@
+# preprocessor.template.yaml
+# 第3段階: 前処理（正規化・シーケンス化） 設定ファイル
+
+# 品質フィルタリング設定
+quality_filter:
+  max_nan_ratio: 0.01          # NaN含有率上限（1%）
+  min_iqr: 1.0e-6              # 定数列判定閾値（IQR < この値で除外）
+  max_correlation: 0.95         # 高相関ペア除外閾値（|ρ| > この値で除外）
+
+# 正規化設定
+normalization:
+  method: "robust"              # robust | standard | minmax
+  quantile_range: [25, 75]     # RobustScaler用（四分位範囲）
+  save_params: true            # 正規化パラメータの保存（推論時必須）
+
+# シーケンス化設定
+sequences:
+  M1: 480    # 8時間（480分）
+  M5: 288    # 24時間（1440分 / 5）
+  M15: 192   # 48時間（2880分 / 15）
+  H1: 96     # 4日（96時間）
+  H4: 48     # 8日（192時間 / 4）
+
+# 未来リーク検査
+leak_check:
+  enabled: true               # 未来リーク検査の有効化
+  strict_mode: true           # 厳格モード（警告を即エラー化）
+
+# 品質閾値
+thresholds:
+  min_features_after_filter: 30  # フィルタ後の最小特徴量数
+  min_sequences_per_tf: 100      # TF別最小シーケンス数
+
+# パフォーマンス設定
+performance:
+  max_processing_time: 600    # 最大処理時間（秒）
+  memory_limit_mb: 16000      # メモリ上限（MB）
+  batch_processing: false     # バッチ処理（大規模データ用）
+
+# 入出力設定
+io:
+  input_file: "data/feature_calculator.h5"
+  output_file: "data/preprocessor.h5"
+  backup_existing: true       # 既存ファイルをバックアップ
+  report_json: "data/preprocessor_report.json"
+  report_md: "data/preprocessor_report.md"
+
+# ログ設定
+logging:
+  level: "INFO"               # DEBUG, INFO, WARNING, ERROR
+  file: "logs/{timestamp}_preprocessor.log"
+  console: true
+  show_progress: true         # 進捗表示
+
+# デバッグ設定
+debug:
+  save_intermediate: false    # 中間結果の保存（デバッグ用）
+  validate_all_steps: true    # 各ステップでの検証
+  verbose_errors: true        # 詳細なエラーメッセージ
