@@ -1,5 +1,5 @@
 # preprocessor.template.yaml
-# 第3段階: 前処理（正規化・シーケンス化） 設定ファイル
+# 第3段階: 前処理（正規化・シーケンス化・ラベル生成） 設定ファイル
 
 # 品質フィルタリング設定
 quality_filter:
@@ -20,6 +20,26 @@ sequences:
   M15: 192   # 48時間（2880分 / 15）
   H1: 96     # 4日（96時間）
   H4: 48     # 8日（192時間 / 4）
+
+# ラベル生成設定（Phase 0: 基本実装）
+label_generation:
+  enabled: true               # ラベル生成の有効化
+  
+  # NEUTRAL閾値パラメータ
+  k_spread: 1.0               # スプレッド倍率（コスト考慮）
+  k_atr: 0.3                  # ATR倍率（ノイズ除外）
+  spread_default: 1.2         # デフォルトスプレッド（pips）
+  atr_period: 14              # ATR計算期間
+  
+  # 予測時間設定
+  prediction_horizon: 36      # 予測先時間（シーケンス数）
+                              # M5基準: 36 × 5分 = 180分（3時間）
+  
+  # 通貨ペア設定
+  pip_value: 0.01             # USDJPY: 0.01, EURUSD: 0.0001
+  
+  # 品質閾値
+  min_valid_samples_ratio: 0.9  # 有効サンプル比率下限
 
 # 未来リーク検査
 leak_check:

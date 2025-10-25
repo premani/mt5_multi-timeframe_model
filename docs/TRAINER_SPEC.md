@@ -1,7 +1,7 @@
 # TRAINER_SPEC.md
 
-**バージョン**: 1.0
-**更新日**: 2025-10-21
+**バージョン**: 1.1
+**更新日**: 2025-10-25
 **責任者**: core-team
 **処理段階**: 第4段階: 学習
 
@@ -10,6 +10,76 @@
 ## 📋 目的
 
 `src/trainer.py` によるマルチタイムフレーム・マルチタスク学習の実装仕様を定義する。
+
+---
+
+## 🚧 Phase 0 実装状況（2025-10-25）
+
+### 実装済み機能
+
+**✅ 基本構造**:
+- TF別LSTMエンコーダ（M1/M5/M15/H1/H4）
+- 最終隠れ状態の抽出
+- 重み付き平均融合（均等重み: 各0.2）
+- 2ヘッド出力（Direction + Magnitude）
+
+**✅ 学習機能**:
+- データローダー（マルチTF対応）
+- 損失関数（CrossEntropy + HuberLoss）
+- 最適化（Adam + ReduceLROnPlateau）
+- 早期停止
+- ベストモデル保存
+
+**✅ 評価機能**:
+- Direction: Accuracy, Precision, Recall, F1
+- Magnitude: MAE, RMSE, R2（NaN除外対応）
+
+### Phase 0の簡略化事項
+
+**❌ 未実装（仕様書記載だが後回し）**:
+- Attention Fusion → 単純な重み付き平均
+- デュアルモード（Scalp/Swing分離） → 単一Magnitude
+- Trend_Strengthヘッド → なし
+- 動的重み調整 → 固定重み
+- Walk-Forward Validation → 単純な時系列分割
+- PCGrad勾配干渉対策 → なし
+- Huber δ動的調整 → 固定δ=1.0
+- 詳細レポート生成 → 簡易版
+
+### 既知の問題
+
+**⚠️ データ品質**:
+- 前処理データにNaN残存（約0.45%）
+- 学習時に数値不安定（損失NaN発生）
+- 原因: `data/preprocessor.h5` の品質フィルタリング不完全
+
+**⚠️ モデル安定性**:
+- 初期エポックでMagnitude予測がNaN化
+- 勾配爆発の可能性
+- 入力NaNの影響
+
+**📝 対処予定**:
+1. 前処理のNaN完全除去（Issue作成予定）
+2. モデル初期化の改善
+3. 入力データ検証の強化
+
+### Phase 1以降の拡張予定
+
+**Phase 1: 安定化**:
+- 前処理データ品質改善
+- モデル数値安定性確保
+- 実際のラベル生成実装
+
+**Phase 2: 機能拡張**:
+- Attention Fusion実装
+- デュアルモード（Scalp/Swing）
+- Trend_Strengthヘッド追加
+
+**Phase 3: 高度化**:
+- Walk-Forward Validation
+- 動的重み調整
+- PCGrad実装
+- 詳細レポート生成
 
 ---
 
@@ -1148,6 +1218,96 @@ def test_trend_strength_reproducibility():
 ---
 
 ## ⚙️ ハイパーパラメータ
+
+### Phase 0 実装設定（config/trainer.yaml）
+
+```yaml
+# Phase 0: 最小構成設定
+currency_pair: "USDJPY"  # 固定
+
+model:
+  lstm:
+    hidden_size: 128
+    num_layers: 2
+    dropout: 0.2
+    bidirectional: false
+  
+  attention:
+    num_heads: 4        # Phase 0未使用
+    dropout: 0.1
+  
+  output:
+    direction_classes: 3
+    magnitude_range: [0.5, 5.0]  # 単一Magnitude
+
+training:
+  batch_size: 32
+  epochs: 100
+  early_stopping_patience: 10
+  
+  optimizer: "adam"
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  
+  lr_scheduler:
+    enabled: true
+    type: "reduce_on_plateau"
+    factor: 0.5
+    patience: 5
+  
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+
+loss:
+  weights:
+    direction: 1.0
+    magnitude: 0.5
+  
+  huber_delta: 1.0  # 固定
+  
+  class_weights:
+    enabled: true
+    method: "balanced"
+
+data_split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  shuffle: false  # 時系列順序維持
+
+dataloader:
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+
+metrics:
+  direction: ["accuracy", "precision", "recall", "f1"]
+  magnitude: ["mae", "rmse", "r2"]
+
+device:
+  use_cuda: true
+  device_id: 0
+
+reproducibility:
+  seed: 42
+  deterministic: true
+
+io:
+  input_file: "data/preprocessor.h5"
+  output_model: "models/trainer_model.pth"
+  output_checkpoint: "models/trainer_checkpoint.pth"
+  report_json: "data/trainer_report.json"
+  report_md: "data/trainer_report.md"
+  save_best_only: true
+
+phase0:
+  simplified_output: true
+  skip_advanced_features: true
+  max_training_time: 3600
+```
+
+### フル機能版設定（将来実装）
 
 ```yaml
 training:

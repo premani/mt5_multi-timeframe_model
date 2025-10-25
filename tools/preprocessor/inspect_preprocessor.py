@@ -11,6 +11,7 @@ import sys
 import json
 import h5py
 import argparse
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 
@@ -69,6 +70,33 @@ def inspect_preprocessor(file_path: Path) -> None:
                     print()
                 
                 print(f"📈 総シーケンス数: {total_sequences:,}")
+                
+                # NaN/Inf検証
+                print("\n" + "=" * 80)
+                print("✅ データ品質検証")
+                print("=" * 80)
+                print("\n【NaN/Inf検査】")
+                
+                all_clean = True
+                for tf_name in sorted(seq_group.keys()):
+                    # サンプルチェック（最初の100シーケンス）
+                    sample_size = min(100, seq_group[tf_name].shape[0])
+                    sample_data = seq_group[tf_name][:sample_size]
+                    
+                    nan_count = np.isnan(sample_data).sum()
+                    inf_count = np.isinf(sample_data).sum()
+                    total_elements = sample_data.size
+                    
+                    if nan_count > 0 or inf_count > 0:
+                        all_clean = False
+                        print(f"⚠️  {tf_name}: NaN={nan_count}, Inf={inf_count} / {total_elements:,} ({(nan_count+inf_count)/total_elements*100:.2f}%)")
+                    else:
+                        print(f"✅ {tf_name}: クリーン（先頭{sample_size}サンプル）")
+                
+                if all_clean:
+                    print(f"\n✅ 全タイムフレームでNaN/Inf なし（サンプル検証）")
+                else:
+                    print(f"\n⚠️  NaN/Inf検出あり - データ品質に問題")
             else:
                 print("⚠️  シーケンスデータが見つかりません")
             

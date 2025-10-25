@@ -1,0 +1,145 @@
+# trainer.template.yaml
+# Phase 0: 学習処理（最小構成） 設定ファイル
+
+# 通貨ペア設定（Phase 0: 固定）
+currency_pair: "USDJPY"
+
+# ラベル生成設定（Phase 0: 基本実装）
+label_generation:
+  # NEUTRAL閾値パラメータ
+  k_spread: 1.0               # スプレッド倍率（コスト考慮）
+  k_atr: 0.3                  # ATR倍率（ノイズ除外）
+  spread_default: 1.2         # デフォルトスプレッド（pips）
+  atr_period: 14              # ATR計算期間
+  
+  # 予測時間設定
+  prediction_horizon: 36      # 予測先時間（シーケンス数）
+                              # M5基準: 36 × 5分 = 180分（3時間）
+
+# モデルアーキテクチャ設定
+model:
+  # TF別LSTM設定
+  lstm:
+    hidden_size: 128          # 隠れ層サイズ
+    num_layers: 2             # LSTM層数
+    dropout: 0.2              # ドロップアウト率
+    bidirectional: false      # 双方向LSTM（Phase 0: false）
+  
+  # Attention設定
+  attention:
+    num_heads: 4              # アテンションヘッド数
+    dropout: 0.1              # アテンションドロップアウト
+  
+  # マルチヘッド出力設定（Phase 0: 簡略化）
+  output:
+    direction_classes: 3      # UP, DOWN, NEUTRAL
+    magnitude_range: [0.5, 5.0]  # pips範囲（Phase 0: 単一Magnitude）
+
+# 学習設定
+training:
+  # バッチ・エポック設定
+  batch_size: 32              # バッチサイズ
+  epochs: 100                 # エポック数
+  early_stopping_patience: 10 # 早期停止（改善なし連続回数）
+  
+  # 最適化設定
+  optimizer: "adam"           # adam | adamw | sgd
+  learning_rate: 0.001        # 学習率
+  weight_decay: 0.0001        # 重み減衰
+  
+  # 学習率スケジューラ
+  lr_scheduler:
+    enabled: true
+    type: "reduce_on_plateau" # reduce_on_plateau | cosine | step
+    factor: 0.5               # 削減係数
+    patience: 5               # 削減待機エポック数
+  
+  # 勾配クリッピング
+  gradient_clipping:
+    enabled: true
+    max_norm: 1.0             # 勾配ノルム上限
+
+# 損失関数設定（Phase 0: 固定重み）
+loss:
+  # 損失重み（Phase 0: 動的調整なし）
+  weights:
+    direction: 1.0            # 方向予測
+    magnitude: 0.5            # 価格幅予測
+  
+  # Huber損失設定（Magnitude用）
+  huber_delta: 1.0            # δパラメータ（Phase 0: 固定）
+  
+  # クラス不均衡対策
+  class_weights:
+    enabled: true             # クラス重み自動計算
+    method: "balanced"        # balanced | inverse_frequency
+
+# データ分割設定（Phase 0: 単純時系列分割）
+data_split:
+  train_ratio: 0.70           # 訓練データ比率
+  val_ratio: 0.15             # 検証データ比率
+  test_ratio: 0.15            # テストデータ比率
+  shuffle: false              # Phase 0: 時系列順序維持
+
+# データローダー設定
+dataloader:
+  num_workers: 4              # データ読み込みワーカー数
+  pin_memory: true            # GPUメモリ固定
+  prefetch_factor: 2          # プリフェッチ係数
+
+# 評価指標設定
+metrics:
+  # 方向予測評価
+  direction:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+  
+  # 価格幅予測評価
+  magnitude:
+    - "mae"                   # 平均絶対誤差
+    - "rmse"                  # 二乗平均平方根誤差
+    - "r2"                    # 決定係数
+
+# デバイス設定
+device:
+  use_cuda: true              # CUDA使用（自動検出）
+  device_id: 0                # GPU ID
+
+# 再現性設定
+reproducibility:
+  seed: 42                    # 乱数シード
+  deterministic: true         # 決定的動作（速度低下あり）
+
+# 入出力設定
+io:
+  input_file: "data/preprocessor.h5"
+  output_model: "models/trainer_model.pth"
+  output_checkpoint: "models/trainer_checkpoint.pth"
+  report_json: "data/trainer_report.json"
+  report_md: "data/trainer_report.md"
+  save_best_only: true        # ベストモデルのみ保存
+
+# ログ設定
+logging:
+  level: "INFO"               # DEBUG, INFO, WARNING, ERROR
+  file: "logs/{timestamp}_trainer.log"
+  console: true
+  show_progress: true         # 進捗表示
+  tensorboard:
+    enabled: false            # TensorBoard（Phase 0: false）
+    log_dir: "logs/tensorboard"
+
+# デバッグ設定
+debug:
+  save_intermediate: false    # 中間結果保存
+  validate_all_steps: true    # 各ステップ検証
+  verbose_errors: true        # 詳細エラーメッセージ
+  profile_performance: false  # パフォーマンスプロファイリング
+
+# Phase 0 固有設定
+phase0:
+  simplified_output: true     # 簡略化出力（単一Magnitude）
+  skip_advanced_features: true # 高度機能スキップ
+  max_training_time: 3600     # 最大学習時間（秒）

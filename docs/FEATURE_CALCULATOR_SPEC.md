@@ -31,6 +31,12 @@
 - **動作検証完了**: 
   - session_timeのみ再計算、basic_multi_tfはキャッシュ使用
   - リネームなしでの直接読込動作確認
+- **ラベル生成統合**: 
+  - LabelGeneratorを`src/feature_calculator/`に移動
+  - 特徴量計算段階でラベル生成（Direction/Magnitude）
+  - ラベルキャッシュ機能実装（`data/feature_calculator/labels.h5`）
+  - `feature_calculator.h5`に`/labels`グループ保存
+  - 前処理段階での生データ参照を削除（責任分離の徹底）
 
 ### v1.0 (2025-10-22)
 - 初版作成
@@ -95,13 +101,20 @@
   - 時刻エンコード（sin/cos）
   - セッション判定
     ↓
-[ステップ6: 段階的検証]
+[ステップ6: ラベル生成]（Phase 0実装済み）
+  - Direction: UP/NEUTRAL/DOWN（ATR+スプレッド閾値）
+  - Magnitude: 絶対値pips（未来36期間の最大価格差）
+  - キャッシュ: data/feature_calculator/labels.h5
+    ↓
+[ステップ7: 段階的検証]
   - カテゴリ追加毎に精度確認
   - 2%以上改善で受入
     ↓
 出力: data/feature_calculator.h5
   ├─ features: (N, 50-80) float32
   ├─ feature_names: 特徴量名リスト
+  ├─ labels/direction: (N,) int64  ← 追加
+  ├─ labels/magnitude: (N,) float32  ← 追加
   ├─ category_info: カテゴリ別統計
   └─ metadata: 計算統計情報
 
@@ -188,6 +201,15 @@ with h5py.File('features.h5', 'w') as f:
     f.create_dataset('feature_names', 
                      data=[name.encode() for name in features.columns])
     
+    # ラベル（Phase 0実装済み）
+    labels_group = f.create_group('labels')
+    labels_group.create_dataset('direction', 
+                                 data=labels['direction'], 
+                                 dtype='int64')
+    labels_group.create_dataset('magnitude', 
+                                 data=labels['magnitude'], 
+                                 dtype='float32')
+    
     # カテゴリ情報
     f.create_dataset('category_info',
                      data=json.dumps({
@@ -219,7 +241,186 @@ with h5py.File('features.h5', 'w') as f:
 
 ---
 
-## 🔧 実装クラス設計
+## 🏷️ ラベル生成（Phase 0実装済み）
+
+### 概要
+
+特徴量計算段階でラベル（Direction/Magnitude）を生成し、`feature_calculator.h5`に保存する。
+
+**責任分離の原則**:
+- 特徴量計算: 生データから特徴量・ラベルを計算
+- 前処理: 特徴量のフィルタリング・正規化・シーケンス化（ラベルは読み込みのみ）
+- 学習: 前処理済みデータのみを参照
+
+### LabelGenerator クラス
+
+**配置**: `src/feature_calculator/label_generator.py`
+
+```python
+class LabelGenerator:
+    """
+    価格ラベル生成器（Direction + Magnitude）
+    
+    Phase 0実装: 基本的なラベル生成
+    - Direction: UP/NEUTRAL/DOWN（ATR + スプレッド閾値）
+    - Magnitude: 実測価格幅（pips）
+    """
+    
+    def __init__(
+        self,
+        k_spread: float = 1.0,
+        k_atr: float = 0.3,
+        spread_default: float = 1.2,
+        atr_period: int = 14,
+        pip_value: float = 0.01
+    ):
+        self.k_spread = k_spread
+        self.k_atr = k_atr
+        self.spread_default = spread_default
+        self.atr_period = atr_period
+        self.pip_value = pip_value
+    
+    def generate_labels(
+        self,
+        preprocessor_path: Path,
+        collector_path: Path,
+        prediction_horizon: int = 36,
+        n_sequences: int = None
+    ) -> Dict[str, np.ndarray]:
+        """
+        ラベル生成
+        
+        Args:
+            preprocessor_path: 前処理データパス（未使用、互換性のため残存）
+            collector_path: 生データパス（data_collector.h5）
+            prediction_horizon: 予測ホライズン（M5足×36 = 3時間）
+            n_sequences: シーケンス数
+        
+        Returns:
+            {
+                'direction': (N,) int64 [0=DOWN, 1=NEUTRAL, 2=UP],
+                'magnitude': (N,) float32 [pips],
+                'valid_mask': (N,) bool
+            }
+        """
+```
+
+### NEUTRAL閾値計算
+
+```
+threshold = max(spread × k_spread, ATR × k_atr)
+
+例:
+- spread = 1.2 pips, ATR = 15.0 pips
+- k_spread = 1.0, k_atr = 0.3
+- threshold = max(1.2, 4.5) = 4.5 pips
+```
+
+### キャッシュ機能
+
+**キャッシュファイル**: `data/feature_calculator/labels.h5`
+
+```python
+# キャッシュ構造
+with h5py.File('labels.h5', 'r') as f:
+    f['direction'][:]      # (N,) int64
+    f['magnitude'][:]      # (N,) float32
+    f['metadata'][()]      # JSON: 生成日時、パラメータ
+```
+
+**再計算制御**:
+- `recalculate_categories: null` → 常に再計算
+- `recalculate_categories: []` → キャッシュ使用
+- `recalculate_categories: ['labels', ...]` → labels のみ再計算
+
+### 品質検証
+
+```python
+def validate_labels(
+    self, 
+    label_result: Dict[str, np.ndarray], 
+    logger: logging.Logger
+):
+    """
+    ラベル品質検証
+    
+    検証項目:
+    - Direction分布（UP/NEUTRAL/DOWN）
+    - Magnitude統計（平均、中央値、最大）
+    - クラス不均衡検出（比率 > 3:1 で警告）
+    """
+```
+
+---
+
+## � 確認ツール
+
+### tools/feature_calculator/inspect_features.py
+
+**目的**: `feature_calculator.h5`の内容を確認・検証
+
+**実行方法**:
+```bash
+bash ./docker_run.sh python3 tools/feature_calculator/inspect_features.py
+```
+
+**出力内容**:
+```
+================================================================================
+📂 ファイル: feature_calculator.h5
+================================================================================
+
+🗂️  データセット一覧
+   ├── category_info () [object]
+   ├── feature_names (36,) [object]
+   ├── features (31570, 36) [float32]
+   ├── labels/ (Group)
+   ├── labels/direction (31570,) [int64]
+   ├── labels/magnitude (31570,) [float32]
+   └── metadata () [object]
+
+📊 特徴量データ
+   形状: (31570, 36)
+   サンプル数: 31,570
+   特徴量数: 36
+
+🏷️  特徴量名（最初10個）
+    1. M1_price_change_pips
+    2. M1_price_change_rate
+    3. M1_range_pips
+    ...
+
+🏷️  ラベル
+   Direction: (31570,)
+      DOWN: 12680 (40.2%)
+      NEUTRAL: 4539 (14.4%)
+      UP: 14351 (45.5%)
+   Magnitude: (31570,)
+      平均: 9.44 pips
+      中央値: 6.90 pips
+      最大: 210.40 pips
+
+📝 メタデータ
+   作成日時: 2025-10-25T20:31:06.809714+09:00
+   サンプル数: 31,570
+   特徴量数: 36
+   フェーズ: feature_calculator
+```
+
+**検証項目**:
+- HDF5構造の確認
+- 特徴量・ラベルのshape確認
+- ラベル分布の確認
+- メタデータの確認
+
+**使用場面**:
+- 特徴量計算後の即座確認
+- ラベル生成結果の検証
+- デバッグ時のデータ構造確認
+
+---
+
+## �🔧 実装クラス設計
 
 ### メインクラス
 

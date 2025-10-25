@@ -81,3 +81,14 @@ sessions:
   newyork:
     start: "12:00"           # UTC 12:00 = JST 21:00
     end: "20:00"             # UTC 20:00 = JST 05:00
+
+# ラベル生成設定
+label_generation:
+  enabled: true              # ラベル生成有効化
+  k_spread: 1.0              # スプレッド係数
+  k_atr: 0.3                 # ATR係数
+  spread_default: 1.2        # デフォルトスプレッド（pips）
+  atr_period: 14             # ATR計算期間
+  prediction_horizon: 36     # 予測ホライズン（M5足×36 = 3時間）
+  pip_value: 0.01            # pipの値
+  min_valid_samples_ratio: 0.9  # 有効サンプル最小比率
