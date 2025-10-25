@@ -102,28 +102,28 @@ class FeatureCalculatorIntegrator:
             category_name = calculator.name
             category_file = self.category_dir / f"{category_name}.h5"
             
-            # 既存ファイルがあればリネーム（仕様書: 既存ファイルがある場合、JST日時プレフィックス付きでリネーム退避）
+            # 再計算が必要か判定
+            should_recalculate = recalculate_categories is None or category_name in recalculate_categories
+            
+            # 既存ファイル確認
             if category_file.exists():
-                from datetime import datetime, timezone, timedelta
-                # 既存ファイルの作成日時を取得
-                file_mtime = category_file.stat().st_mtime
-                file_dt = datetime.fromtimestamp(file_mtime, tz=timezone(timedelta(hours=9)))
-                timestamp_str = file_dt.strftime('%Y%m%d_%H%M%S')
-                backup_file = self.category_dir / f"{timestamp_str}_{category_name}.h5"
-                category_file.rename(backup_file)
-                logger.info(f"💾 {category_name} 既存キャッシュリネーム: {backup_file.name}")
-                
-                # キャッシュ利用判定
-                use_cache = recalculate_categories is not None and category_name not in recalculate_categories
-                
-                if use_cache:
-                    # キャッシュから読み込み
+                if should_recalculate:
+                    # 再計算する場合のみリネーム
+                    from datetime import datetime, timezone, timedelta
+                    file_mtime = category_file.stat().st_mtime
+                    file_dt = datetime.fromtimestamp(file_mtime, tz=timezone(timedelta(hours=9)))
+                    timestamp_str = file_dt.strftime('%Y%m%d_%H%M%S')
+                    backup_file = self.category_dir / f"{timestamp_str}_{category_name}.h5"
+                    category_file.rename(backup_file)
+                    logger.info(f"💾 {category_name} 既存キャッシュリネーム: {backup_file.name}")
+                else:
+                    # キャッシュ使用する場合はリネームせず読み込み
                     logger.info(f"💾 {category_name} キャッシュ使用")
                     
                     start_time = time.time()
                     
                     try:
-                        with h5py.File(backup_file, 'r') as f:
+                        with h5py.File(category_file, 'r') as f:
                             data_array = f['features'][:]
                             feature_names_bytes = f['feature_names'][:]
                             feature_names = [name.decode('utf-8') for name in feature_names_bytes]
@@ -147,7 +147,7 @@ class FeatureCalculatorIntegrator:
                     except Exception as e:
                         logger.warning(f"⚠️  {category_name} キャッシュ読み込み失敗: {e}\n   → 再計算します")
             
-            # 計算実行
+            # 計算実行（should_recalculateがTrueの場合、またはファイルが存在しない場合）
             logger.info(f"🧮 {category_name} 計算開始")
             
             start_time = time.time()
