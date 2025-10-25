@@ -241,12 +241,8 @@ secrets/
 
 # --- コンフィグ運用ファイル（テンプレートのみGit管理） ---
 config/data_collector.yaml
-config/data_mt5_collect.yaml
-config/data_mt5_purification.yaml
-config/features_calculate.yaml
-config/features_inspect.yaml
-config/features_select.yaml
-config/prepare_sequences.yaml
+config/feature_calculator.yaml
+config/preprocessor.yaml
 config/train.yaml
 config/train_validate.yaml
 config/transformation_onnx.yaml
@@ -267,4 +263,4 @@ CLAUDE.md
 !AGENTS.md
 !CLAUDE.md
 !.gitignore
-config/feature_calculator.yaml
+
